@@ -43,6 +43,20 @@ pub fn clip_line(line: SLine, width: usize) -> SLine {
     vec![(out, None)]
 }
 
+/// 把 tag 左对齐放在 line 前面，占 slot 列：翻到头没有 tag 时补空格，后面的字和按钮不会跟着左右挪。
+/// slot 为 0（一屏放得下，不用翻）就原样返回。和 Python 版 lead() 一样。
+pub fn lead(line: SLine, tag: &str, slot: usize) -> SLine {
+    if slot == 0 {
+        return line;
+    }
+    let mut out = vec![
+        (tag.to_owned(), Some(colors().grey)),
+        (format!("{} ", " ".repeat(slot.saturating_sub(tag.width()))), None),
+    ];
+    out.extend(line);
+    out
+}
+
 /// 还有多久重置，窄到塞得进一行：1d14h / 2h01m / 37m（固定 6 格）。
 fn left_str(secs: f64) -> String {
     if secs <= 0.0 {

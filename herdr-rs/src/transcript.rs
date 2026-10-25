@@ -18,6 +18,7 @@ const NOISE_PREFIXES: [&str; 4] = [
     "This session is being continued from a previous conversation",
 ];
 pub const PROMPT_MAX: usize = 4000; // 展开时最多显示你那句话的多少个字
+const TEXT_KEEP: usize = 16_000; // 一条消息的文字最多拼这么多字节：只要开头（你的话前 4000 字、回复第一行），别把几 MB 的整段都复制一遍
 const REPLY_MAX: usize = 200;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -102,7 +103,11 @@ impl<'de: 'a, 'a> Deserialize<'de> for Content<'a> {
                 let (mut parts, mut tool_result) = (Vec::new(), false);
                 while let Some(b) = seq.next_element::<Block>()? {
                     match b.kind.as_deref() {
-                        Some("text") => parts.push(b.text.unwrap_or_default().into_owned()),
+                        Some("text") if parts.iter().map(String::len).sum::<usize>() < TEXT_KEEP => {
+                            let t = b.text.unwrap_or_default();
+                            let cut = t.char_indices().map(|(i, _)| i).find(|&i| i >= TEXT_KEEP).unwrap_or(t.len());
+                            parts.push(t[..cut].to_owned());
+                        }
                         Some("tool_result") => tool_result = true,
                         _ => {}
                     }
@@ -193,14 +198,31 @@ fn trigger(e: &Raw) -> Option<(&'static str, String)> {
     if e.meta == Some(true) || text.is_empty() {
         return None;
     }
+    let keep = || text.chars().take(PROMPT_MAX).collect::<String>(); // 先截再复制
     if kind == Some("human") {
-        return Some(("human", text.to_owned()));
+        return Some(("human", keep()));
     }
     if NOISE_PREFIXES.iter().any(|p| text.starts_with(p)) || text.starts_with('<') || slash_command(text) {
         return None;
     }
-    Some(("human", text.to_owned()))
+    Some(("human", keep()))
 }
+
+/// 让系统的内存分配器把空闲的内存还给系统。macOS 的 malloc 释放以后先留着不还，进程就一直停在读最长那一行时的峰值；
+/// Rust 用的就是系统的 malloc，所以这一下管用（Python 版有自己的内存池，同样的调用没有效果）。
+#[cfg(target_os = "macos")]
+fn release_free_memory() {
+    unsafe extern "C" {
+        fn malloc_zone_pressure_relief(zone: *mut std::ffi::c_void, goal: usize) -> usize;
+    }
+    // SAFETY: 传空指针表示所有 zone，goal 0 表示能还多少还多少；不碰任何指针
+    unsafe {
+        malloc_zone_pressure_relief(std::ptr::null_mut(), 0);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn release_free_memory() {}
 
 pub struct Transcript {
     pub path: PathBuf,
@@ -265,6 +287,9 @@ impl Transcript {
         }
         self.buf = buf;
         self.size = size;
+        if self.pos - start > 1 << 20 {
+            release_free_memory(); // 一次读了 1 MB 以上（打开、原地重启）：解析时用过的内存还给系统
+        }
         self.pos > start
     }
 

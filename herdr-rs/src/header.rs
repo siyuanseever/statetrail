@@ -145,6 +145,8 @@ pub struct Info<'a> {
     pub turns: usize,
     pub gone: usize,
     pub flash: Option<&'a str>,
+    pub up_tag: &'a str, // 「▲ 73」：列表上面还有几轮（到头了是空的）
+    pub slot: usize,     // ▲ / ▼ 在行首占几列（一屏放得下就是 0）
 }
 
 /// 宽版表头；第二个值是「N 轮」那一行是第几行（从 1 数，点它什么都不做）。
@@ -176,7 +178,7 @@ pub fn wide(width: usize, i: &Info) -> (Vec<SLine>, usize) {
         &claude::current_account(i.cfg_dir),
         claude::auto_compact_at(),
     ));
-    lines.push(head_line);
+    lines.push(render::lead(head_line, i.up_tag, i.slot)); // 「N 轮」那一行放在最后，▲ 在它最前面
     let n = lines.len();
     (lines, n)
 }
@@ -234,6 +236,9 @@ pub fn narrow(width: usize, i: &Info) -> Vec<SLine> {
         fields.retain(|(p, ln)| *p != prio || width_of(ln) <= room);
     }
     lines.extend(fields.into_iter().map(|(_, l)| l));
+    if let Some(last) = lines.pop() {
+        lines.push(render::lead(last, i.up_tag, i.slot)); // ▲ 放在最后一行（离列表最近）最前面
+    }
     lines.into_iter().map(|l| clip_line(l, room)).collect()
 }
 

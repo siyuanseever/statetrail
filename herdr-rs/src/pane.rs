@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use crate::header;
 use crate::i18n::t;
 use crate::jump::{self, Outcome, Term};
+use crate::render;
 use crate::transcript::Transcript;
 use crate::ui::{self, Item};
 use crate::{Config, FRAME, WIDE_MIN, claude, herdr};
@@ -26,6 +27,7 @@ const TICK: Duration = Duration::from_secs(60); // 没有事件时多久醒一�
 const AGENT_CHECK: Duration = Duration::from_secs(5); // Claude 退出了却没等到事件：这么久补查一次
 const GONE_GRACE: Duration = Duration::from_secs(2); // Claude 退出后过这么久就关掉轨迹，不留残骸
 const WHEEL: usize = 3; // 滚轮一格翻几项
+const TAB_NAME_MAX: usize = 24; // tab 名最多多少列（中文算两格）
 
 enum Msg {
     Input(Event),
@@ -100,6 +102,41 @@ struct Trail {
     head_ln: usize,                      // 宽版「N 轮」那一行（点它什么都不做）
     mc: (Option<u64>, (String, String)), // (对话记录大小, (模型, 上下文))：没变就不重读尾巴
     last_kick: Option<Instant>,
+    view: (usize, usize, usize),     // (列表上面还有几轮, 下面还有几轮, 露出来几项)
+    up_at: Option<(usize, usize)>,   // 表头里的 ▲：(第几行, 占到第几列)
+    down_at: Option<(usize, usize)>, // 底部的 ▼：(第几行, 占到第几列)
+    footer_top: u16,
+    titled: Option<String>, // 上次拿来给 tab 起名的会话名
+    code: CodeSig,          // 启动时的程序
+    code_new: Option<CodeSig>,
+    restart: Option<PathBuf>, // 插件更新了：主循环退出后在这一格原地换成这个目录里的程序
+}
+
+type CodeSig = (PathBuf, Option<std::time::SystemTime>);
+
+/// (herdr 登记的插件目录, 那里 bin/statetrail 的修改时间)。herdr plugin update 会装进一个新目录，旧目录里的文件不变，
+/// 所以要看 herdr 的登记（plugins.json）；本地 link 的目录换了新编译的程序，修改时间会变。
+fn code_sig() -> CodeSig {
+    let here = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent()?.parent().map(PathBuf::from))
+        .unwrap_or_default();
+    let registry = std::env::var_os("HERDR_PLUGIN_CONFIG_DIR")
+        .map(PathBuf::from)
+        .and_then(|c| c.ancestors().nth(3).map(|h| h.join("plugins.json")))
+        .unwrap_or_else(|| crate::home().join(".config/herdr/plugins.json"));
+    let root = std::fs::read(&registry)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .and_then(|v| {
+            v.as_array()?
+                .iter()
+                .find(|p| p["plugin_id"].as_str() == Some(crate::plugin_id().as_str()))
+                .and_then(|p| p["plugin_root"].as_str().map(PathBuf::from))
+        })
+        .unwrap_or(here);
+    let mtime = std::fs::metadata(root.join("bin/statetrail")).and_then(|m| m.modified()).ok();
+    (root, mtime)
 }
 
 impl Trail {
@@ -110,6 +147,7 @@ impl Trail {
     /// 问 herdr 这个 Claude 现在什么状态、跑的哪个会话，读对话记录新追加的部分。返回 false = Claude 那一格没了。
     fn refresh(&mut self) -> bool {
         let Some(info) = herdr::pane_info(&self.target) else { return false };
+        self.name_tab(&info);
         self.status = info["agent_status"].as_str().map(str::to_owned);
         if info["agent"].as_str() == Some("claude") {
             self.no_claude_since = None;
@@ -194,6 +232,10 @@ impl Trail {
     /// 点表头：第 1 行是按钮；宽版「N 轮」那一行什么都不做；模型、柱子那几行点了去查一次真实额度。
     fn header_click(&mut self, ln: usize, col: usize, width: u16, tx: &Sender<Msg>) {
         let narrow = width < WIDE_MIN;
+        if self.up_at.is_some_and(|(l, slot)| l == ln && col <= slot + 1) {
+            self.page(-1); // 点在行首 ▲ 那一段（偏一格也算）
+            return;
+        }
         if ln == 1 {
             let buttons = if narrow { header::narrow_buttons() } else { header::wide_buttons() };
             if let Some(a) = header::button_at(&buttons, col) {
@@ -202,6 +244,72 @@ impl Trail {
         } else if narrow || ln != self.head_ln {
             self.kick_usage(true, tx);
         }
+    }
+
+    /// 点 ▲ / ▼：翻一屏的轮数，少翻一项留一轮重叠（边上那一轮常常只露出半截）。
+    fn page(&mut self, d: i32) {
+        let step = self.view.2.saturating_sub(1).max(1);
+        if d < 0 {
+            self.offset = self.offset.saturating_sub(step);
+            self.follow = false;
+        } else {
+            self.offset += step; // 画的时候按最底夹住；下面已经没有了就重新跟着走
+            self.follow = self.view.1 <= step;
+        }
+    }
+
+    /// 用 Claude 的会话名（终端标题，Claude 会按话题自己改）给 tab 命名。只动「没被你手动起过名」的 tab：
+    /// label 还是 herdr 默认的编号，或者还是我们上次起的那个名字。和 Python 版 name_tab 一样。
+    fn name_tab(&mut self, info: &Value) {
+        let title = info["terminal_title_stripped"].as_str().unwrap_or("").trim().to_owned();
+        let Some(tab) = info["tab_id"].as_str() else { return };
+        if !self.cfg.tab_names || title.is_empty() || self.titled.as_deref() == Some(title.as_str()) {
+            return;
+        }
+        self.titled = Some(title.clone());
+        let name = if unicode_width::UnicodeWidthStr::width(title.as_str()) > TAB_NAME_MAX {
+            format!(
+                "{}…",
+                render::plain(&render::clip_line(vec![(title.clone(), None)], TAB_NAME_MAX - 1))
+            )
+        } else {
+            title
+        };
+        let Ok(r) = herdr::call("tab.get", json!({"tab_id": tab})) else {
+            return;
+        };
+        let path = crate::state_dir().join("tab-names.json");
+        let mut ours: serde_json::Map<String, Value> = std::fs::read(&path)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
+        let label = r["tab"]["label"].as_str().unwrap_or("");
+        let number = r["tab"]["number"].as_i64().map(|n| n.to_string()).unwrap_or_default();
+        if label == name || (label != number && Some(label) != ours.get(tab).and_then(Value::as_str)) {
+            return;
+        }
+        if herdr::call("tab.rename", json!({"tab_id": tab, "label": name})).is_ok() {
+            ours.insert(tab.to_owned(), json!(name));
+            let _ = std::fs::write(&path, Value::Object(ours).to_string());
+        }
+    }
+
+    /// 插件的程序换了（连着两次看到同一份新的，免得装到一半就换），而且新程序跑得起来：返回新目录。
+    fn code_changed(&mut self) -> Option<PathBuf> {
+        let sig = code_sig();
+        if sig == self.code || sig.1.is_none() {
+            self.code_new = None;
+            return None;
+        }
+        if self.code_new.as_ref() != Some(&sig) {
+            self.code_new = Some(sig);
+            return None;
+        }
+        let ok = std::process::Command::new(sig.0.join("bin/statetrail"))
+            .arg("version")
+            .output()
+            .is_ok_and(|o| o.status.success());
+        ok.then_some(sig.0)
     }
 
     fn widths(&self) -> Option<(i64, i64)> {
@@ -417,6 +525,14 @@ pub fn run(cfg: Config) {
         head_ln: 0,
         mc: (None, (String::new(), String::new())),
         last_kick: None,
+        view: (0, 0, 0),
+        up_at: None,
+        down_at: None,
+        footer_top: u16::MAX,
+        titled: None,
+        code: code_sig(),
+        code_new: None,
+        restart: None,
     };
     s.save_reg();
     // 右键固定交给 herdr 的菜单：轨迹自己不用右键
@@ -435,8 +551,18 @@ pub fn run(cfg: Config) {
     let _ = execute!(term.backend_mut(), event::DisableMouseCapture, terminal::LeaveAlternateScreen);
     let _ = terminal::disable_raw_mode();
     s.jump_token.fetch_add(1, Ordering::SeqCst);
-    for p in [crate::run_dir().join(format!("{}.json", me.replace(':', "_"))), sock_of(&me)] {
-        let _ = std::fs::remove_file(p);
+    // 原地重启时登记留着：换程序那一下，别让自动打开以为这里没有轨迹、再开一个
+    if s.restart.is_none() {
+        let _ = std::fs::remove_file(crate::run_dir().join(format!("{}.json", me.replace(':', "_"))));
+    }
+    let _ = std::fs::remove_file(sock_of(&me));
+    if let Some(root) = s.restart {
+        use std::os::unix::process::CommandExt;
+        let err = std::process::Command::new(root.join("bin/statetrail"))
+            .arg("pane")
+            .current_dir(&root)
+            .exec();
+        eprintln!("statetrail: restart failed: {err}");
     }
 }
 
@@ -478,23 +604,6 @@ fn run_loop(
             let (model, ctx) = s.model_ctx();
             let usage = claude::read_usage(&s.cfg_dir, s.sid.as_deref(), s.cfg.live_usage);
             let stops = s.tr.as_ref().map(|t| t.visible()).unwrap_or_default();
-            let info = header::Info {
-                cfg_dir: &s.cfg_dir,
-                model: &model,
-                ctx: &ctx,
-                usage: usage.as_ref(),
-                found: s.tr.is_some(),
-                turns: stops.len(),
-                gone: stops.iter().filter(|x| x.compacted).count(),
-                flash: s.flash.as_ref().map(|(m, _)| m.as_str()),
-            };
-            let head = if narrow {
-                header::narrow(size.width as usize, &info)
-            } else {
-                let (lines, head_ln) = header::wide(size.width as usize, &info);
-                s.head_ln = head_ln;
-                lines
-            };
             let view = ui::View {
                 stops: &stops,
                 narrow,
@@ -505,17 +614,79 @@ fn run_loop(
             };
             let items = view.items();
             let room = size.width.saturating_sub(2) as usize;
-            let rows = (size.height as usize).saturating_sub(head.len() + 1);
-            let bottom = ui::bottom_offset(&view, &items, room, rows);
-            if s.follow {
-                s.offset = bottom;
+            let mut info = header::Info {
+                cfg_dir: &s.cfg_dir,
+                model: &model,
+                ctx: &ctx,
+                usage: usage.as_ref(),
+                found: s.tr.is_some(),
+                turns: stops.len(),
+                gone: view.gone(),
+                flash: s.flash.as_ref().map(|(m, _)| m.as_str()),
+                up_tag: "",
+                slot: 0,
+            };
+            let head_len = if narrow {
+                header::narrow(size.width as usize, &info).len()
+            } else {
+                header::wide(size.width as usize, &info).0.len()
+            };
+            // 列表露出来的范围决定 ▲ / ▼；窄版的 ▼ 要多一行底部，列表就少一行，所以最多算两遍
+            let mut foot_len = 1;
+            let (mut slot, mut counts);
+            loop {
+                let rows = (size.height as usize).saturating_sub(head_len + 1 + 1 + foot_len);
+                let bottom = ui::bottom_offset(&view, &items, room, rows);
+                if s.follow {
+                    s.offset = bottom;
+                }
+                s.offset = s.offset.min(bottom);
+                counts = ui::view_counts(&view, &ui::visible(&view, &items, s.offset, rows, room));
+                slot = if counts.0 > 0 || counts.1 > 0 {
+                    unicode_width::UnicodeWidthStr::width(format!("▼{}{}", if narrow { "" } else { " " }, stops.len()).as_str())
+                } else {
+                    0
+                };
+                let want = if narrow && slot > 0 { 2 } else { 1 };
+                if want == foot_len {
+                    break;
+                }
+                foot_len = want;
             }
-            s.offset = s.offset.min(bottom);
+            s.view = counts;
+            let tag = |arrow: &str, n: usize| {
+                if n > 0 {
+                    format!("{arrow}{}{n}", if narrow { "" } else { " " })
+                } else {
+                    String::new()
+                }
+            };
+            let up_tag = tag("▲", counts.0);
+            info.up_tag = &up_tag;
+            info.slot = slot;
+            let head = if narrow {
+                header::narrow(size.width as usize, &info)
+            } else {
+                let (lines, head_ln) = header::wide(size.width as usize, &info);
+                s.head_ln = head_ln;
+                lines
+            };
+            s.up_at = (slot > 0 && counts.0 > 0).then_some((head.len(), slot));
+            // 底部：宽版一行（第 4 步放按钮，▼ 在行首）；窄版三个按钮就占满了，▼ 在第二行
+            let down_tag = tag("▼", counts.1);
+            let mut footer: Vec<render::SLine> = vec![Vec::new()];
+            if foot_len == 2 {
+                footer.push(Vec::new());
+            }
+            let at = footer.len() - 1;
+            footer[at] = render::lead(std::mem::take(&mut footer[at]), &down_tag, slot);
+            s.down_at = (slot > 0 && counts.1 > 0).then_some((at, slot));
             let mut drawn = None;
-            term.draw(|f| drawn = Some(ui::draw(f, &head, &view, s.offset)))?;
+            term.draw(|f| drawn = Some(ui::draw(f, &head, &footer, &view, s.offset)))?;
             if let Some(d) = drawn {
                 s.hits = d.hits;
                 s.header_len = d.list_top.saturating_sub(1);
+                s.footer_top = d.footer_top;
             }
         }
 
@@ -559,6 +730,12 @@ fn run_loop(
                     let tr_len = s.tr.as_ref().map_or(0, |t| t.visible().len());
                     if s.offset >= tr_len {
                         s.follow = true;
+                    }
+                }
+                MouseEventKind::Down(MouseButton::Left) if m.row >= s.footer_top => {
+                    let (row, col) = ((m.row - s.footer_top) as usize, (m.column as usize).saturating_sub(1));
+                    if s.down_at.is_some_and(|(r, slot)| r == row && col <= slot + 1) {
+                        s.page(1);
                     }
                 }
                 MouseEventKind::Down(MouseButton::Left) if m.row < s.header_len => {
@@ -623,6 +800,10 @@ fn run_loop(
         }
         if now >= next_check {
             next_check = now + AGENT_CHECK;
+            if let Some(root) = s.code_changed() {
+                s.restart = Some(root);
+                return Ok(()); // 插件更新了：收掉界面，原地换成新程序（run 里 exec）
+            }
             if s.no_claude_since.is_none() && herdr::pane_info(&s.target).is_none_or(|i| i["agent"].as_str() != Some("claude")) {
                 stale = true;
             }

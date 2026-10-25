@@ -221,10 +221,40 @@ pub fn to_line(l: &SLine) -> Line<'static> {
 pub struct Drawn {
     pub hits: Vec<(u16, Item)>, // 列表区里每一行对应的项
     pub list_top: u16,          // 列表从第几行开始
+    pub footer_top: u16,        // 底部第一行在第几行
 }
 
-/// 画一帧：表头（左边留 2 列，和列表的指针那一列对齐）、整行的分隔线、列表。
-pub fn draw(f: &mut Frame, header: &[SLine], v: &View, offset: usize) -> Drawn {
+/// 列表区从 offset 开始画，露出来的是哪几项（第一行露出来就算）。
+pub fn visible(v: &View, items: &[Item], offset: usize, rows: usize, room: usize) -> Vec<Item> {
+    let mut used = 0;
+    let mut out = Vec::new();
+    for &it in items.iter().skip(offset) {
+        if used >= rows {
+            break;
+        }
+        out.push(it);
+        used += height_of(v, it, room);
+    }
+    out
+}
+
+/// 列表上面还有几轮、下面还有几轮、露出来几项：和 Python 版 read_view 的算法一样（它是读屏，这里是算）。
+/// 「已压缩」那一行露出来时，上面算 0 轮；那一行代表的是第 1 到第 N 轮。
+pub fn view_counts(v: &View, shown: &[Item]) -> (usize, usize, usize) {
+    let nums: Vec<usize> = shown
+        .iter()
+        .filter_map(|it| if let Item::Stop(i) = it { Some(i + 1) } else { None })
+        .collect();
+    let fold = shown.first() == Some(&Item::Fold);
+    match (nums.first(), nums.last()) {
+        (Some(&a), Some(&b)) => (if fold { 0 } else { a - 1 }, v.stops.len() - b, nums.len() + usize::from(fold)),
+        _ if fold => (0, v.stops.len() - v.gone(), 1),
+        _ => (0, 0, 0),
+    }
+}
+
+/// 画一帧：表头（左边留 2 列，和列表的指针那一列对齐）、整行的分隔线、列表、整行的分隔线、底部。
+pub fn draw(f: &mut Frame, header: &[SLine], footer: &[SLine], v: &View, offset: usize) -> Drawn {
     let c = colors();
     let area = f.area();
     let room = area.width.saturating_sub(2) as usize;
@@ -253,7 +283,31 @@ pub fn draw(f: &mut Frame, header: &[SLine], v: &View, offset: usize) -> Drawn {
         );
     }
     let top = sep_y + 1;
-    let rows = (area.y + area.height).saturating_sub(top) as usize;
+    let foot_h = footer.len() as u16;
+    let footer_top = (area.y + area.height).saturating_sub(foot_h);
+    let rows = footer_top.saturating_sub(1).saturating_sub(top) as usize; // 底部上面还有一条分隔线
+    if footer_top > top {
+        let sep = Line::from(Span::styled("─".repeat(area.width as usize), Style::default().fg(c.dim)));
+        f.render_widget(
+            Paragraph::new(sep),
+            Rect {
+                x: area.x,
+                y: footer_top - 1,
+                width: area.width,
+                height: 1,
+            },
+        );
+        let foot: Vec<Line> = footer.iter().map(to_line).collect();
+        f.render_widget(
+            Paragraph::new(foot),
+            Rect {
+                x: area.x + 2,
+                y: footer_top,
+                width: area.width.saturating_sub(2),
+                height: foot_h,
+            },
+        );
+    }
     let items = v.items();
     let mut hits = Vec::new();
     let mut lines: Vec<Line> = Vec::new();
@@ -297,5 +351,9 @@ pub fn draw(f: &mut Frame, header: &[SLine], v: &View, offset: usize) -> Drawn {
             height: rows as u16,
         },
     );
-    Drawn { hits, list_top: top }
+    Drawn {
+        hits,
+        list_top: top,
+        footer_top,
+    }
 }

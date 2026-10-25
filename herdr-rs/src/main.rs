@@ -63,6 +63,7 @@ pub struct Config {
     pub lang: String,
     pub icons: String,    // "auto"（装了 Nerd Font 就用它的图标）/ "nerd" / "unicode" / "text"
     pub live_usage: bool, // 实时查额度（读 Claude Code 存在钥匙串里的令牌）；false 只读缓存
+    pub tab_names: bool,  // 没手动起过名的 tab，用 Claude 的会话名命名
 }
 
 pub fn config() -> Config {
@@ -85,6 +86,7 @@ pub fn config() -> Config {
             .unwrap_or("auto")
             .to_owned(),
         live_usage: table.get("live_usage").and_then(toml::Value::as_bool).unwrap_or(true),
+        tab_names: table.get("tab_names").and_then(toml::Value::as_bool).unwrap_or(true),
     }
 }
 
@@ -254,6 +256,7 @@ fn main() {
         Some("pane") => pane::run(cfg),
         Some("auto") => cmd_auto(&cfg),
         Some("toggle") => cmd_toggle(&cfg),
+        Some("version") => println!("statetrail {}", env!("CARGO_PKG_VERSION")),
         // 开发用：按 ⟳ 的规矩查一次额度（statetrail refresh-usage <配置目录> [force]）
         Some("refresh-usage") => {
             let dir = std::env::args()
@@ -282,6 +285,8 @@ fn main() {
                 turns: stops.len(),
                 gone: stops.iter().filter(|x| x.compacted).count(),
                 flash: None,
+                up_tag: "",
+                slot: 0,
             };
             let width: usize = a[5].parse().unwrap_or(40);
             let lines = if a[4] == "narrow" {
