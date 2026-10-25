@@ -3,7 +3,7 @@
 # 安装：herdr plugin install siyuanseever/statetrail/herdr
 id = "statetrail"
 name = "statetrail"
-version = "0.1.0"
+version = "0.1.2"
 min_herdr_version = "0.9.5"
 description = "Claude Code session trail docked to the right of the Claude pane: one row per turn, click a turn and Claude scrolls to its final reply. Context and quota bars on top."
 platforms = ["macos", "linux"]
