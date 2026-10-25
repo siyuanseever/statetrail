@@ -382,23 +382,19 @@ def button_at(buttons, col):
     return None
 
 
-def hang(line, tag, room):
-    """把 tag 右对齐挂在 line 的右端，总宽 room。放不下先截左边的字，tag 不截。
-    返回 (这一行, tag 从第几列起)；没有 tag 就原样返回 (line, None)。"""
-    if not tag:
-        return line, None
-    tw = R.cols(tag)
-    keep = max(0, room - tw - 1)               # 左边的字和 tag 之间至少隔一格
-    if R.cols(line) > keep:
-        line = R.clip(line, keep) + R.RESET
-    return line + " " * max(1 if keep else 0, room - R.cols(line) - tw) + tag, room - tw + 1
-
-
 def live_dir(path):
     """这个目录还在就原样返回；被删了（比如 Claude 开在一个已经收掉的 worktree 里）就退到还在的上一级。"""
     while path and not os.path.isdir(path):
         path = os.path.dirname(path)
     return path or str(Path.home())
+
+
+def lead(line, tag, slot):
+    """把 tag 左对齐放在 line 前面，占 slot 列：tag 短了、或者翻到头没有 tag 时补空格，后面的字和按钮就不会跟着
+    左右挪（用户要 ▲ / ▼ 靠左，和左边的进度条对齐）。slot 为 0（一屏放得下，不用翻）就原样返回。"""
+    if not slot:
+        return line
+    return tag + " " * (slot - R.cols(tag)) + " " + line
 
 
 def short_model(model):
@@ -499,9 +495,9 @@ class Sidebar:
         self.pushed = (None, None, None)      # 上次推给 fzf 的 (列表, 表头, 底部)
         self.view = (0, 0, 0)                 # 列表现在露出来的范围：(上面还有几轮, 下面还有几轮, 露出来几项)
         self.view_at = []                     # 什么时候去读一下自己的屏幕，更新 view
-        self.up_at = None                     # 表头里的 ▲：(第几行, 从第几列起)，点表头时按行、列认
+        self.up_at = None                     # 表头里的 ▲：(第几行, 占到第几列)，点表头时按行、列认
         self.head_ln = None                   # 宽版「N 轮 / 已压缩」那一行是表头第几行（点它不查额度，和挪下来之前一样）
-        self.down_at = None                   # 底部第 1 行里的 ▼ 从第几列起
+        self.down_at = None                   # 底部的 ▼：(第几行, 占到第几列)
         self.flash = None                     # (一句提示, 到什么时候为止)
         self.mc = (None, ("", ""))            # (对话记录大小, model_ctx)：没变就不重读尾巴
         self.due = []                         # 预约的补刷时间
@@ -516,6 +512,7 @@ class Sidebar:
         self.plugins = []                     # 装了的其他 herdr 插件（load_plugins）：打开时、点 ⟳ 时、plugins.json 改了时读
         self.plugins_mtime = None             # 上次看到的 plugins.json 修改时间
         self.foot_rows = []                   # 底部每一行的按钮，画和点都按它
+        self.foot_shift = {}                  # {第几行: 行首给 ▼ 留了几列}
         self.code, self.code_new = code_sig(), None   # 启动时的代码 / 刚看到、还要再确认一次的新代码
         self.reload_at = time.monotonic() + RELOAD_EVERY
         self.restart = None                   # 要换成的新插件目录：主循环退出后 cmd_pane 原地 exec 过去
@@ -662,8 +659,9 @@ class Sidebar:
         for prio in (1, 2, 3):
             fields = [(p, ln) for p, ln in fields if p != prio or R.cols(ln) <= room]
         lines += [ln for _, ln in fields]
-        lines[-1], col = hang(lines[-1], self.page_tag(-1), room)
-        self.up_at = (len(lines), col) if col else None
+        slot = self.page_slot()
+        lines[-1] = lead(lines[-1], self.page_tag(-1), slot)
+        self.up_at = (len(lines), slot) if slot and self.view[0] else None
         return "\n".join(R.clip(ln, room) for ln in lines)
 
     def wide_header(self, width):
@@ -680,18 +678,20 @@ class Sidebar:
         model, ctx = self.model_ctx()
         lines = R.status_lines(width, model, ctx, u, claude.current_account(self.cfg_dir),
                                claude.auto_compact_at(), claude.CTX_HARD)
-        # 「N 轮已压缩 · 当前 M 轮」放在表头最后一行，紧挨着列表，▲ 挂在它右端（用户定的）
-        lines = [buttons_line(wide_buttons(), u), *lines, head]
+        # 「N 轮已压缩 · 当前 M 轮」放在表头最后一行，紧挨着列表，▲ 放在它最前面（用户定的）
+        slot = self.page_slot()
+        lines = [buttons_line(wide_buttons(), u), *lines, lead(head, self.page_tag(-1), slot)]
         self.head_ln = len(lines)
-        lines[-1], col = hang(lines[-1], self.page_tag(-1), width - 2)
-        self.up_at = (len(lines), col) if col else None
+        self.up_at = (len(lines), slot) if slot and self.view[0] else None
         return "\n".join(lines)
 
     def footer(self, width):
-        """底部：自己的按钮，后面（│ 隔开）是其他 herdr 插件的按钮，放不下的收进 ⋯；▼ 挂在第一行右端。
-        窄版第一行放不下插件，插件单独放第二行、只写名字的首字母。画和点都按 self.foot_rows 算。"""
+        """底部：自己的按钮，后面（│ 隔开）是其他 herdr 插件的按钮，放不下的收进 ⋯。▼ 放在按钮行最前面；
+        窄版放不下（三个按钮就占了 13 列里的 12 列），▼ 放在第二行最前面（插件那一行，没插件就单独一行）。
+        画和点都按 self.foot_rows / self.foot_shift 算。"""
         room = max(4, width - 2)
-        tag = self.page_tag(1)
+        tag, slot = self.page_tag(1), self.page_slot()
+        shift = slot + 1 if slot else 0
         # 工具开着时底部不变：不高亮、不加关闭按钮，再点一次同一个按钮就关（用户定的）
         tools = footer_buttons()
         # 第一层只放有图标的插件；icons = "text"（全写成字）时照样写名字。没图标的只在 ⋯ 里（按名字列出）
@@ -699,15 +699,18 @@ class Sidebar:
         plug = [(p["icon"] or p["label"], f"plug:{i}", 0) for i, p in enumerate(self.plugins) if p["icon"] or text]
         hidden = len(plug) < len(self.plugins)
         if self.mode == "narrow":
-            rows = [tools, self.fit_plugins([], plug, room, hidden)] if self.plugins else [tools]
+            rows = [tools]
+            if self.plugins or slot:
+                rows.append(self.fit_plugins([], plug, room - shift, hidden) if self.plugins else [])
         else:
-            first = room - (R.cols(tag) + 1 if tag else 0)
-            rows = [self.fit_plugins(tools + ([("│", None, 0)] if tools else []), plug, first, hidden)
+            rows = [self.fit_plugins(tools + ([("│", None, 0)] if tools else []), plug, room - shift, hidden)
                     if self.plugins else tools]
-        self.foot_rows = rows
+        at = len(rows) - 1 if self.mode == "narrow" else 0    # ▼ 在第几行（从 0 数）
+        self.foot_rows, self.foot_shift = rows, {at: shift}
+        self.down_at = (at + 1, slot) if slot and self.view[1] else None
         lines = [buttons_line(r) if r else "" for r in rows]
-        lines[0], self.down_at = hang(lines[0], tag, room)
-        return "\n".join(ln or " " for ln in lines)
+        lines[at] = lead(lines[at], tag, slot)
+        return "\n".join(R.clip(ln, room) + R.RESET if ln else " " for ln in lines)
 
     def fit_plugins(self, head, plug, room, hidden=False):
         """head 后面接插件按钮，放不下的收进 ⋯（点了弹出所有插件的所有 action，带名字）。有插件没上第一层（没图标）
@@ -721,6 +724,12 @@ class Sidebar:
                 break
             keep.append(c)
         return keep + [more]
+
+    def page_slot(self):
+        """▲ / ▼ 在行首占几列：列表一屏放得下就 0；放不下就按最多可能的轮数留宽，翻页时后面的字不挪。"""
+        if not (self.view[0] or self.view[1]):
+            return 0
+        return R.cols(f"▼{'' if self.mode == 'narrow' else ' '}{len(self.stops())}")
 
     def page_tag(self, d):
         """列表上面还有几轮（▲ 73）、下面还有几轮（▼ 5），点一下翻一页；窄版写成「▲73」「▼5」。
@@ -847,7 +856,7 @@ class Sidebar:
             ln, col = parts[1], parts[2]
             if not (ln.isdigit() and col.isdigit()):
                 return
-            if self.up_at and int(ln) == self.up_at[0] and int(col) >= self.up_at[1] - 1:   # 点在 ▲ 那一段（偏一格也算）
+            if self.up_at and int(ln) == self.up_at[0] and int(col) <= self.up_at[1] + 1:   # 点在行首 ▲ 那一段（偏一格也算）
                 self.page(-1)
                 return
             if self.mode == "narrow":
@@ -866,11 +875,12 @@ class Sidebar:
             act = button_at(wide_buttons(), int(col)) if ln == "1" else None
             if act:
                 self.act(act)
-        elif parts[0] == "foot" and len(parts) > 2 and parts[1].isdigit() and parts[2].isdigit():   # 底部，第 1 行右端是 ▼
+        elif parts[0] == "foot" and len(parts) > 2 and parts[1].isdigit() and parts[2].isdigit():   # 底部，▼ 在行首
             ln, col = int(parts[1]), int(parts[2])
-            if ln == 1 and self.down_at and col >= self.down_at - 1:
+            if self.down_at and ln == self.down_at[0] and col <= self.down_at[1] + 1:
                 self.page(1)
                 return
+            col -= self.foot_shift.get(ln - 1, 0)             # 行首给 ▼ 留了位置，按钮往右挪了这么多
             act = button_at(self.foot_rows[ln - 1], col) if 0 < ln <= len(self.foot_rows) else None
             if act:
                 self.act(act)
