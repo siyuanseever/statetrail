@@ -74,7 +74,7 @@ DEFAULTS = {
     # 按钮开的工具从 Claude 下面切出来（Claude 宽度不变，只是变矮；轨迹一直露在旁边能点），占 Claude 那一格高度的比例
     "tool_height": 0.5,
     # 底部在自己的按钮后面（│ 隔开）自动列出装了的其他 herdr 插件，每个插件一个按钮、绑它的第一个 action；放不下的收进 ⋯。
-    # 打开轨迹时读一次，点 ⟳ 时再读一次，不轮询。[plugins."<插件 id>"] 里可以 hidden = true 藏掉、action = "…" 换绑、
+    # 打开轨迹时、点 ⟳ 时、herdr 的 plugins.json 改了时（装 / 卸插件）读，不问 herdr 轮询。[plugins."<插件 id>"] 里可以 hidden = true 藏掉、action = "…" 换绑、
     # icon = "…" 换图标、label = "…" 换名字
     "plugin_buttons": True,
     "plugins": {},
@@ -509,7 +509,8 @@ class Sidebar:
         self.tool = None                      # (工具窗格, 第几个按钮)：开着的 lazygit / yazi 之类
         self.tool_check = None                # 焦点离开工具窗格的时刻：0.4 秒后还不在它身上就关
         self.tool_sticky = False              # 这个工具不跟着「点外面就关」（命令行）
-        self.plugins = []                     # 装了的其他 herdr 插件（load_plugins），打开时和点 ⟳ 时读
+        self.plugins = []                     # 装了的其他 herdr 插件（load_plugins）：打开时、点 ⟳ 时、plugins.json 改了时读
+        self.plugins_mtime = None             # 上次看到的 plugins.json 修改时间
         self.foot_rows = []                   # 底部每一行的按钮，画和点都按它
         self.code, self.code_new = code_sig(), None   # 启动时的代码 / 刚看到、还要再确认一次的新代码
         self.reload_at = time.monotonic() + RELOAD_EVERY
@@ -974,6 +975,15 @@ class Sidebar:
         except (OSError, ValueError, HerdrError) as e:
             self.say(f"⋯: {e}")
 
+    def plugins_changed(self):
+        """herdr 的插件登记（plugins.json）改过没有：装、卸、开、关插件都会写它。只看修改时间，不问 herdr。"""
+        try:
+            m = (CONFIG_DIR.parents[2] / "plugins.json").stat().st_mtime_ns
+        except (OSError, IndexError):
+            return False
+        changed, self.plugins_mtime = self.plugins_mtime not in (None, m), m
+        return changed
+
     def code_changed(self):
         """插件代码换了（连着两次看到同一份新代码，免得装到一半就换），而且新代码能编译：返回新目录。"""
         sig = code_sig()
@@ -1183,6 +1193,7 @@ class Sidebar:
         self.refresh()
         self.kick_usage()
         self.mode = self.mode_for(self.width())
+        self.plugins_changed()                # 先记下 plugins.json 现在的样子，之后变了才重读
         self.plugins = load_plugins()
         self.start_fzf()
         buf = b""
@@ -1257,6 +1268,9 @@ class Sidebar:
                     self.restart = self.code_changed()
                     if self.restart:
                         break                                 # 插件更新了：收掉 fzf，原地换成新代码（cmd_pane）
+                    if self.plugins_changed():                # 装了 / 卸了别的 herdr 插件：底部的插件按钮跟上
+                        self.plugins = load_plugins()
+                        stale = True
                 if self.view_at and self.view_at[0] <= time.monotonic():
                     self.view_at = [t for t in self.view_at if t > time.monotonic()]
                     if self.update_view() and not stale:

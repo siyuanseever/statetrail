@@ -46,7 +46,8 @@ statetrail is for the session you are in: it stays beside the live Claude and fo
   overlay, and herdr's overlay covers the whole tab, trail included, so its button runs `open-tab` instead
   (`open-split` would squeeze Claude from 83 to 42 columns; a new tab leaves this one untouched). What doesn't fit
   goes into `⋯`, which pops up every action of every plugin, with names: click one to run it, `Esc` to cancel. The list is read
-  when the trail opens and when you click `⟳`, never polled.
+  when the trail opens, when you click `⟳`, and when herdr's `plugins.json` changes (install / uninstall), so an
+  uninstalled plugin's button goes away by itself within a few seconds.
 - **Updates itself in place.** After `herdr plugin update`, each open trail notices within about ten seconds and
   restarts in the same pane with the new code, keeping its place and width. No need to close and reopen it.
 

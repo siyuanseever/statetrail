@@ -36,7 +36,7 @@ statetrail 管的是你正在用的这个会话：贴在运行中的 Claude 旁�
   第一个 action，顺序按它自己的 manifest（herdr-sidebar 是 `open-sidebar`）。例外是 zoetrope：它的第一个 action 开的是 overlay，
   而 herdr 的 overlay 会盖满整个标签页、连轨迹一起盖住，所以它的按钮改跑 `open-tab`（`open-split` 会把 Claude 从 83 列挤到 42 列；
   新开一个标签页，这一页一点不动）。放不下的收进 `⋯`，点了弹出所有插件的所有 action（带名字），点哪个就运行哪个，`Esc` 不选。
-  插件列表在打开轨迹时和点 `⟳` 时读，不轮询。
+  插件列表在打开轨迹时、点 `⟳` 时、herdr 的 `plugins.json` 改了时（装、卸插件）读：卸掉的插件几秒内自己从底部消失。
 - **自己跟着更新。** `herdr plugin update` 之后，开着的轨迹十秒左右就会发现，在原来那一格里换成新代码重启，位置和宽度都不变，
   不用关了再开。
 
