@@ -289,6 +289,10 @@ def wide_buttons():
     return [(icon("narrow"), "narrow", 0), (icon("bottom"), "bottom", 0), (icon("usage"), "usage", 10)]
 
 
+def narrow_buttons():
+    return [(icon("wide"), "wide", 0), (icon("bottom"), "bottom", 0), (icon("usage"), "usage", 0)]
+
+
 def footer_buttons():
     return [(t, a, 0) for t, a in tool_buttons()]
 
@@ -633,7 +637,8 @@ class Sidebar:
         room = max(4, width - 2)                       # fzf 表头左边留 2 列
         flash = f" {R.WARN_C}!{R.RESET}" if self.flash and time.monotonic() < self.flash[1] else ""
         # 不画 Claude 的状态（工作中 / 等你 / 完成）：herdr 左侧的 Agents 栏已经有了，只显示 herdr 没有的（用户定的）
-        lines = [f" {R.BOLD}{icon('wide')}{R.RESET}{flash}"]    # « 在第 4 列，和宽版的 » 同一个位置（fzf 表头左边留 2 列）
+        # 第 1 行和宽版一样三个按钮：« 拉回宽版、⇊ 主界面到最底、⟳ 刷新（用户要的）；« 在第 4 列，和宽版的 » 同一个位置
+        lines = [buttons_line(narrow_buttons()) + flash]
         model, ctx = self.model_ctx()
         acct = claude.short_account(self.cfg_dir)
         u = claude.read_usage(self.cfg_dir, self.sid)
@@ -847,7 +852,9 @@ class Sidebar:
                 return
             if self.mode == "narrow":
                 if ln == "1":
-                    self.act("wide")
+                    act = button_at(narrow_buttons(), int(col))
+                    if act:
+                        self.act(act)
                 elif int(ln) >= 2:             # 模型、账号、百分比那几行：查一次额度
                     self.kick_usage(force=True)
                 return
