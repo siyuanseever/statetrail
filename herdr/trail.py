@@ -66,10 +66,10 @@ DEFAULTS = {
     # icon 可选：写 ICONS 里的名字（"git"、"files"…）就按 icons 那一档取字形，也可以直接写一个字形
     # 命令行：要输密码的 sudo、要在浏览器里登录的 gcloud auth login、交互式的 ssh 这类 Claude 替你跑不了的命令，
     # 点开它、语音说进去，用完 exit 或再点一次按钮就关。它不跟着「点外面就关」：跑到一半的 ssh 不能因为你点了一下 Claude 就没了
-    # height：这个工具占 Claude 那一格高度的比例，不写就按 tool_height。Git 要看的东西多，一半不够（用户 2026-10-25 说的），
-    # 给到 herdr 允许的最大 0.9：Claude 只剩上面一小条，旁边的轨迹照样能点、能再点一次 Git 关掉
+    # height：这个工具占 Claude 那一格高度的比例，不写就按 tool_height。Git、文件要看的东西多，一半不够（用户 2026-10-25 说的），
+    # 给到 herdr 允许的最大 0.9：Claude 只剩上面一小条，旁边的轨迹照样能点、能再点一次按钮关掉。命令行一半就够
     "buttons": [{"label": "Git", "command": "lazygit", "icon": "git", "height": 0.9},
-                {"label": "文件", "command": "yazi", "icon": "files"},
+                {"label": "文件", "command": "yazi", "icon": "files", "height": 0.9},
                 {"label": "命令行", "command": "$SHELL", "icon": "shell", "close_on_blur": False}],
     # 按钮开的工具从 Claude 下面切出来（Claude 宽度不变，只是变矮；轨迹一直露在旁边能点），占 Claude 那一格高度的比例
     "tool_height": 0.5,

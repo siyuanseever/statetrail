@@ -29,7 +29,7 @@ statetrail is for the session you are in: it stays beside the live Claude and fo
 - **Follows herdr, adds only what herdr lacks.** Colours come from your herdr theme, and a tab you never named gets
   the Claude session's name. Claude's running / waiting state is not repeated: herdr's agent list already shows it.
 - **Your buttons.** A row at the bottom for your own tools — by default Git (lazygit), Files (yazi) and a shell. A tool
-  opens below Claude, in Claude's working directory (Git takes 90% of its height, Files and the shell half): Claude
+  opens below Claude, in Claude's working directory (Git and Files take 90% of its height, the shell half): Claude
   keeps its width and only gets shorter, and the trail stays
   usable beside it. The bottom row stays as it is. To close a tool: click its button again, quit the tool (`q` in
   lazygit and yazi, `Esc` in lazygit too, `exit` in the shell), or, for Git and Files, click anywhere outside it. Claude gets its
@@ -104,6 +104,7 @@ height = 0.9              # share of the Claude pane's height; 0.9 is the most h
 label = "Files"
 command = "yazi"
 icon = "files"
+height = 0.9
 
 [[buttons]]
 label = "Shell"

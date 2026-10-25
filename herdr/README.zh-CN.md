@@ -24,7 +24,7 @@ statetrail 管的是你正在用的这个会话：贴在运行中的 Claude 旁�
 - **跟着 herdr，只补它没有的。** 颜色取自你的 herdr 主题；没起过名的 tab 会用 Claude 的会话名命名。
   Claude 在不在干活这类状态不重复显示，herdr 左侧的 Agents 栏已经有了。
 - **自己的按钮。** 最底下一行放你自己的工具，默认是 Git（lazygit）、文件（yazi）和命令行。工具开在 Claude 下面、目录是 Claude 的
-  （Git 占 Claude 那一格高度的 90%，文件和命令行占一半）：
+  （Git 和文件占 Claude 那一格高度的 90%，命令行占一半）：
   Claude 宽度不变、只是变矮，旁边的轨迹照样能点，底部栏不变。
   关掉它：再点一次同一个按钮、在工具里退出（lazygit 和 yazi 按 `q`，lazygit 按 `Esc` 也行，命令行输入 `exit`），
   Git 和文件点外面任何地方也会关。关掉后 Claude 恢复原来的高度、拿回焦点。开着一个时点另一个按钮就换过去，同时只开一个。
@@ -92,6 +92,7 @@ height = 0.9              # 占 Claude 那一格高度的比例，0.9 是 herdr 
 label = "文件"
 command = "yazi"
 icon = "files"
+height = 0.9
 
 [[buttons]]
 label = "命令行"
