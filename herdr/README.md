@@ -38,12 +38,14 @@ statetrail is for the session you are in: it stays beside the live Claude and fo
   `gcloud auth login` in a browser, an interactive `ssh`): it starts in Claude's directory and stays open when you
   click elsewhere.
 - **Your other herdr plugins, one click away.** After your own buttons and a `│`, the bottom row lists the other
-  herdr plugins you have installed and enabled, one button each, named after the plugin (`herdr-sidebar` → `sidebar`;
-  the first letter only in the narrow view, on a second row). A button runs the plugin's first action that works on
+  herdr plugins you have installed and enabled, one icon each, no text (on a second row in the narrow view). herdr
+  plugins don't declare icons, so statetrail ships them for the ones it knows (herdr-sidebar `▥`, herdr-file-viewer
+  `▭`, zoetrope `⋔`, or their Nerd Font icons); a plugin without one is listed by name under `⋯` instead, until you
+  give it an `icon` in the config. A button runs the plugin's first action that works on
   this machine, in its manifest's order (herdr-sidebar: `open-sidebar`). Exception: zoetrope's first action opens an
   overlay, and herdr's overlay covers the whole tab, trail included, so its button runs `open-tab` instead
   (`open-split` would squeeze Claude from 83 to 42 columns; a new tab leaves this one untouched). What doesn't fit
-  goes into `⋯`, which pops up every action of every plugin: click one to run it, `Esc` to cancel. The list is read
+  goes into `⋯`, which pops up every action of every plugin, with names: click one to run it, `Esc` to cancel. The list is read
   when the trail opens and when you click `⟳`, never polled.
 - **Updates itself in place.** After `herdr plugin update`, each open trail notices within about ten seconds and
   restarts in the same pane with the new code, keeping its place and width. No need to close and reopen it.

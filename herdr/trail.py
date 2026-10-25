@@ -298,6 +298,14 @@ def footer_buttons():
 # split 开在 Claude 旁边，把 Claude 从 83 列挤到 42 列；tab 开一个新标签页，原来那一页一点不动（实测）
 PLUGIN_DEFAULT_ACTION = {"furkankly.zoetrope": "open-tab"}
 
+# 底部第一层只放图标，不放字（用户定的）；插件的 manifest 里没有图标，认识的这几个由我们配：(nerd, unicode)。
+# 不认识的、配置里也没给图标的插件，不上第一层，在 ⋯ 弹出来的那一层里按名字列出
+PLUGIN_ICONS = {
+    "herdr-sidebar": ("", "▥"),        # 侧栏
+    "herdr-file-viewer": ("", "▭"),    # 看文件
+    "furkankly.zoetrope": ("", "⋔"),   # 会话流程图
+}
+
 
 def load_plugins():
     """装了、开着的其他 herdr 插件：[{id, label, icon, action, actions: [(action_id, 标题)]}]，按 herdr 列出来的顺序。
@@ -334,7 +342,9 @@ def load_plugins():
             continue
         action = next((x for x in (mine.get("action"), PLUGIN_DEFAULT_ACTION.get(pid)) if x in ids), ids[0])
         label = str(mine.get("label") or re.sub(r"^herdr-", "", (p.get("name") or pid).split(".")[-1]))
-        out.append({"id": pid, "label": label, "icon": "" if CFG["icons"] == "text" else str(mine.get("icon") or ""),
+        tier = CFG["icons"]
+        ic = "" if tier == "text" else str(mine.get("icon") or (PLUGIN_ICONS.get(pid) or ("", ""))[tier == "unicode"])
+        out.append({"id": pid, "label": label, "icon": ic,
                     "action": action, "actions": [(a["action_id"], a.get("title") or a["action_id"]) for a in avail]})
     return out
 
@@ -678,22 +688,26 @@ class Sidebar:
         tag = self.page_tag(1)
         # 工具开着时底部不变：不高亮、不加关闭按钮，再点一次同一个按钮就关（用户定的）
         tools = footer_buttons()
-        plug = [(p["icon"] or (p["label"] if self.mode != "narrow" else p["label"][:1].upper()), f"plug:{i}", 0)
-                for i, p in enumerate(self.plugins)]
+        # 第一层只放有图标的插件；icons = "text"（全写成字）时照样写名字。没图标的只在 ⋯ 里（按名字列出）
+        text = CFG["icons"] == "text"
+        plug = [(p["icon"] or p["label"], f"plug:{i}", 0) for i, p in enumerate(self.plugins) if p["icon"] or text]
+        hidden = len(plug) < len(self.plugins)
         if self.mode == "narrow":
-            rows = [tools, self.fit_plugins([], plug, room)] if plug else [tools]
+            rows = [tools, self.fit_plugins([], plug, room, hidden)] if self.plugins else [tools]
         else:
             first = room - (R.cols(tag) + 1 if tag else 0)
-            rows = [self.fit_plugins(tools + ([("│", None, 0)] if tools else []), plug, first) if plug else tools]
+            rows = [self.fit_plugins(tools + ([("│", None, 0)] if tools else []), plug, first, hidden)
+                    if self.plugins else tools]
         self.foot_rows = rows
         lines = [buttons_line(r) if r else "" for r in rows]
         lines[0], self.down_at = hang(lines[0], tag, room)
         return "\n".join(ln or " " for ln in lines)
 
-    def fit_plugins(self, head, plug, room):
-        """head 后面接插件按钮，放不下的收进 ⋯（点了弹出所有插件的所有 action）。"""
+    def fit_plugins(self, head, plug, room, hidden=False):
+        """head 后面接插件按钮，放不下的收进 ⋯（点了弹出所有插件的所有 action，带名字）。有插件没上第一层（没图标）
+        时 ⋯ 一直在。"""
         more = (icon("more"), "plugmenu", 0)
-        if cells_w(head + plug) <= room:
+        if not hidden and cells_w(head + plug) <= room:
             return head + plug
         keep = list(head)
         for c in plug:
