@@ -34,9 +34,9 @@ statetrail/
 | `claude.rs` | 配置目录、账号、上下文和模型、额度三层来源（实时 / statusLine 桥接 / `.claude.json` 缓存）、所有轨迹共用的查询节流（文件锁 + 时间戳）、`fetch.log` | `core/claude.py` |
 | `jump.rs` | 让 Claude 滚到某一轮的那套算法（读屏、PageUp / PageDown、找回复开头） | `core/jump.py` |
 | `ui/` | 表头（按钮、柱子、模型账号）、列表（自己记滚动位置，▲ / ▼ 翻页、点击、悬停）、底部（自己的按钮、插件图标、⋯）；宽版 / 窄版 | `core/render.py`、`Sidebar.header/rows/footer`、fzf |
-| `tools.rs` | 底部按钮开工具窗格（Claude 下面，高度按按钮）、Git 选仓库（自己画的列表，不再起 fzf）、命令行 | `run_tool`、`cmd_pickrepo` |
-| `plugins.rs` | 列出其他 herdr 插件、绑 action、开新标签页的插件跳回原页、⋯ 弹窗 | `load_plugins`、`run_plugin`、`cmd_menu` |
-| `sysres.rs` | **新**：底部的系统资源一行（CPU、GPU、内存、磁盘、网络），点开看明细 | 取代被取消的 v0.1.5 |
+| `tools.rs` | 找目录、找 git 仓库、找程序，列出其他 herdr 插件、绑 action | `live_dir`、`git_root`、`find_repos`、`load_plugins` |
+| `picker.rs` | Git 选仓库和 ⋯ 弹窗：自己画的扁平列表，不再起 fzf | `cmd_pickrepo`、`cmd_menu` |
+| `pane.rs` 里的底部 | 底部按钮开工具窗格（Claude 下面，高度按按钮）、点外面就关、开新标签页的插件跳回原页 | `run_tool`、`run_plugin`、`footer` |
 | `theme.rs`、`i18n.rs` | herdr 的 18 套调色板、中英文（`themes.json`、`en.tsv` 编进程序里） | `theme.py`、`core/i18n.py` |
 | `update.rs` | 发现插件被更新（看 `plugins.json`）就在原地换成新程序 | `code_sig`、`code_changed` |
 
@@ -46,15 +46,18 @@ statetrail/
 2. **没有 fzf 子进程**，每个轨迹只剩一个进程。Git 选仓库和 ⋯ 弹窗也改成程序自己画。
 3. **对话记录只解析需要的字段**：不再把每一行整个变成对象，内存天然就小，不用 v0.1.4 那个子进程的办法。
 
-## 系统资源那一行（新功能）
+## 系统资源：不放进轨迹（2026-10-25 改）
 
-- 显示：CPU、GPU、内存、磁盘、网络（上下行速率），平时灰色，高了才变色，规则和额度柱子一样；窄版放不下时按 网络 → 磁盘 → GPU 的顺序丢。
-- 采样只由一个进程做：所有轨迹抢同一把文件锁，抢到的那个每 5 秒采一次，写进一份缓存文件，其他轨迹只读缓存。采样本身也算进资源预算。
-- 数据来源（macOS，不要 sudo）：CPU 和内存用系统调用（内存口径和「活动监视器」的「已使用」一致，照搬 tmux 版
-  `bin/tmux-sysstat.sh` 的算法）；GPU 用 `ioreg -r -d 1 -c IOAccelerator` 的 "Device Utilization %"；磁盘、网络用系统调用。
-  每 5 秒起一次 `ioreg` 会不会太贵，要实测，贵就改成拉长间隔。
-- 点某一项，就像 Git 一样从 Claude 下面开一个窗格看明细；明细程序从 tmux 版的 `bin/sys-monitor.py` 移植过来，复制进本仓库，不依赖 claude-tmux-sessions。
-- 可以在配置里关掉这一行。
+原计划在每个轨迹底部加一行 CPU、GPU、内存、磁盘、网络。用户改了方案：
+
+- 不放进轨迹：开 5 个轨迹，同样的数字会重复显示 5 遍。
+- 不做「每个 Claude 占多少内存」。用户原话：「这个就别写了」。
+- 实时总览放在 herdr 顶部标签栏右侧的状态区（herdr 配置 `[ui] tab_bar_right`，每 5 秒跑一次命令）。
+  用户原话：「它就跟我们的 statetrail 没有关系了，对吗？它是一个 herdr 的配置。」
+  所以由 dotfiles 的 `herdr/status.sh` 来做，不在本仓库里。
+- 本仓库只做一件事：底部第 4 个默认按钮「监视器」，从 Claude 下面打开 btop（高度 0.9），再点一次关掉，在 btop 里按 q 也能退出。
+  btop 1.4.6 的默认配置就能只用鼠标结束进程：点进程那一行 → 点 terminate → 点 Yes。所以不另带 btop 配置。
+  这个按钮跟第 4 步一起做了（`5fabd10`）。
 
 ## 分发：用户不用装 Rust
 
@@ -83,7 +86,7 @@ herdr plugin install siyuanseever/statetrail/herdr
 | 2 | 表头：按钮、ctx / 5h / 7d 柱子、模型账号、额度三层来源；宽版 / 窄版；主题、中英文 | 32 份基准改成比较去掉颜色后的文字，和 Python 版一致 |
 | 3 | 交互：▲ / ▼ 翻页、宽窄切换、tab 命名、Claude 退出就关、更新后原地重启 | 演示 herdr 里逐项真点 |
 | 4 | 底部：Git / 文件 / 命令行（下面打开，按钮自己的高度）、Git 选仓库、插件图标、⋯、跳回已开的标签页 | 照 v0.1.3、v0.1.4 的验证清单再跑一遍 |
-| 5 | 系统资源一行 | 开 5 个轨迹时，资源检查仍然达标 |
+| 5 | btop 按钮（系统资源改由 herdr 顶部状态区显示，见上文） | 只用鼠标在 btop 里结束一个进程；资源检查仍然达标 |
 | 6 | 分发：install.sh、GitHub Actions、发版顺序；替换 `herdr/` | 全新环境从 GitHub 安装，不装 Rust 也能用 |
 
 每一步都在单独的 worktree 里做，做完先 link 到你本机试，资源检查达标才算这一步完成。第 6 步之前，不动大家正在装的 Python 版。
