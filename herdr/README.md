@@ -28,9 +28,11 @@ statetrail is for the session you are in: it stays beside the live Claude and fo
   jumps between the two widths. There is no close button: the narrow view is how you put it away.
 - **Follows herdr, adds only what herdr lacks.** Colours come from your herdr theme, and a tab you never named gets
   the Claude session's name. Claude's running / waiting state is not repeated: herdr's agent list already shows it.
-- **Your buttons.** A row at the bottom for your own tools — by default Git (lazygit) and Files (yazi). A tool opens
+- **Your buttons.** A row at the bottom for your own tools — by default Git (lazygit), Files (yazi) and a shell. A tool opens
   to the right of Claude in Claude's working directory, so Claude stays visible on the left; click anywhere outside it,
-  or press Esc / q, to close it.
+  or press Esc / q, to close it. The third default button, `›_`, is a shell for the commands Claude can't run for you
+  (`sudo` asking for a password, `gcloud auth login` in a browser, an interactive `ssh`): it starts in Claude's
+  directory, stays open when you click elsewhere, and closes when you `exit` or click `›_` again.
 - **Updates itself in place.** After `herdr plugin update`, each open trail notices within about ten seconds and
   restarts in the same pane with the new code, keeping its place and width. No need to close and reopen it.
 
@@ -74,17 +76,23 @@ live_usage = true         # also ask for live 5h / 7d quota with your Claude log
 lang = ""                 # "en" / "zh"; empty follows your locale
 tab_names = true          # name an unnamed tab after the Claude session
 
-# Bottom-row buttons. Writing any [[buttons]] replaces the default two.
+# Bottom-row buttons. Writing any [[buttons]] replaces the default three.
 # A button shows its icon, or its label when it has no icon (or icons = "text").
 [[buttons]]
 label = "Git"
-command = "lazygit"       # runs in a popup, in Claude's working directory (through sh -c)
+command = "lazygit"       # opens to the right of Claude, in Claude's working directory (through sh -c)
 icon = "git"              # an icon name (git, files) or any single glyph
 
 [[buttons]]
 label = "Files"
 command = "yazi"
 icon = "files"
+
+[[buttons]]
+label = "Shell"
+command = "$SHELL"        # your login shell
+icon = "shell"
+close_on_blur = false     # stays open when you click elsewhere; exit, or click the button again, to close
 
 # A button can also run another herdr plugin's action instead of a command:
 # [[buttons]]

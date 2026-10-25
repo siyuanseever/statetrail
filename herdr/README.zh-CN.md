@@ -23,8 +23,9 @@ statetrail 管的是你正在用的这个会话：贴在运行中的 Claude 旁�
   左上角的 `»` / `«` 一键在两种宽度之间切换。没有关闭按钮，窄版就是把它收起来的方式。
 - **跟着 herdr，只补它没有的。** 颜色取自你的 herdr 主题；没起过名的 tab 会用 Claude 的会话名命名。
   Claude 在不在干活这类状态不重复显示，herdr 左侧的 Agents 栏已经有了。
-- **自己的按钮。** 最底下一行放你自己的工具，默认是 Git（lazygit）和文件（yazi）。工具开在 Claude 右边、目录是 Claude 的，
-  左边的 Claude 还看得见；点它外面任何地方、或按 Esc / q 就关。
+- **自己的按钮。** 最底下一行放你自己的工具，默认是 Git（lazygit）、文件（yazi）和命令行。工具开在 Claude 右边、目录是 Claude 的，
+  左边的 Claude 还看得见；点它外面任何地方、或按 Esc / q 就关。第三个默认按钮 `›_` 是命令行，放 Claude 替你跑不了的命令
+  （要输密码的 `sudo`、要在浏览器里登录的 `gcloud auth login`、交互式的 `ssh`）：起始目录是 Claude 的，点别处不关，`exit` 或再点一次 `›_` 才关。
 - **自己跟着更新。** `herdr plugin update` 之后，开着的轨迹十秒左右就会发现，在原来那一格里换成新代码重启，位置和宽度都不变，
   不用关了再开。
 
@@ -67,17 +68,23 @@ live_usage = true         # 用你的 Claude 登录实时查额度（见下）�
 lang = ""                 # "en" / "zh"；不写就按系统 locale
 tab_names = true          # 没起过名的 tab 用 Claude 的会话名命名
 
-# 最底下一行的按钮。写了 [[buttons]] 就整组替换默认的两个。
+# 最底下一行的按钮。写了 [[buttons]] 就整组替换默认的三个。
 # 有图标就只画图标，没有图标（或 icons = "text"）就只写 label。
 [[buttons]]
 label = "Git"
-command = "lazygit"       # 在浮窗里跑，目录是 Claude 那一格的（经 sh -c）
+command = "lazygit"       # 开在 Claude 右边，目录是 Claude 那一格的（经 sh -c）
 icon = "git"              # 图标名（git、files）或者直接写一个字形
 
 [[buttons]]
 label = "文件"
 command = "yazi"
 icon = "files"
+
+[[buttons]]
+label = "命令行"
+command = "$SHELL"        # 你的登录 shell
+icon = "shell"
+close_on_blur = false     # 点别处不关；exit，或再点一次按钮才关
 
 # 按钮也可以不跑命令，改成调别的 herdr 插件的动作：
 # [[buttons]]

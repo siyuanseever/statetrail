@@ -64,8 +64,11 @@ DEFAULTS = {
     #   command = "lazygit"                       在 Claude 那一格的目录里，用本插件的浮窗跑它（经 sh -c）
     #   action = "herdr-sidebar.open-sidebar"     调别的 herdr 插件的动作（默认配置里不放这种）
     # icon 可选：写 ICONS 里的名字（"git"、"files"…）就按 icons 那一档取字形，也可以直接写一个字形
+    # 命令行：要输密码的 sudo、要在浏览器里登录的 gcloud auth login、交互式的 ssh 这类 Claude 替你跑不了的命令，
+    # 点开它、语音说进去，用完 exit 或再点一次按钮就关。它不跟着「点外面就关」：跑到一半的 ssh 不能因为你点了一下 Claude 就没了
     "buttons": [{"label": "Git", "command": "lazygit", "icon": "git"},
-                {"label": "文件", "command": "yazi", "icon": "files"}],
+                {"label": "文件", "command": "yazi", "icon": "files"},
+                {"label": "命令行", "command": "$SHELL", "icon": "shell", "close_on_blur": False}],
 }
 
 
@@ -235,6 +238,7 @@ ICONS = {
     "7d":      ("", "▦",     "7d"),
     "git":     ("", "±",     ""),         # 文字档不另加图标，按钮本身就有字
     "files":   ("", "▤",     ""),
+    "shell":   ("", "›_",    ""),         # 命令行按钮
 }
 _TIER = ("nerd", "unicode", "text").index(CFG["icons"])
 
@@ -429,6 +433,7 @@ class Sidebar:
         self.no_claude_since = None           # 这一格里从什么时候起不是 Claude 了
         self.tool = None                      # (工具窗格, 第几个按钮)：开着的 lazygit / yazi 之类
         self.tool_check = None                # 焦点离开工具窗格的时刻：0.4 秒后还不在它身上就关
+        self.tool_sticky = False              # 这个工具不跟着「点外面就关」（命令行）
         self.code, self.code_new = code_sig(), None   # 启动时的代码 / 刚看到、还要再确认一次的新代码
         self.reload_at = time.monotonic() + RELOAD_EVERY
         self.restart = None                   # 要换成的新插件目录：主循环退出后 cmd_pane 原地 exec 过去
@@ -785,10 +790,12 @@ class Sidebar:
             if same:
                 return
         cmd = button["command"]
+        shell = os.environ.get("SHELL") or "/bin/sh"
         try:
             prog = shlex.split(cmd)[0]
         except (ValueError, IndexError):
             prog = cmd
+        prog = prog.replace("${SHELL}", shell).replace("$SHELL", shell)   # 命令行按钮的 "$SHELL"：你的登录 shell
         if not shutil.which(prog):
             self.say(_t("找不到 {p}").format(p=prog))
             return
@@ -798,7 +805,7 @@ class Sidebar:
             home = str(Path.home())
             short = "~" + cwd[len(home):] if cwd == home or cwd.startswith(home + "/") else cwd
             self.say(_t("Claude 的目录已经不在了，改在 {d} 打开").format(d=short), 8)
-        env = {"STATETRAIL_CWD": cwd, "STATETRAIL_CMD": cmd, "PATH": os.environ.get("PATH", "")}
+        env = {"STATETRAIL_CWD": cwd, "STATETRAIL_CMD": cmd, "PATH": os.environ.get("PATH", ""), "SHELL": shell}
         if prog == "lazygit":                 # 在最外层按 Esc 也退出，和 yazi 一样（叠加在你自己的配置后面）
             mine = Path(sh_out("lazygit", "--print-config-dir").strip() or "/nonexistent") / "config.yml"
             env["LG_CONFIG_FILE"] = ",".join([*([str(mine)] if mine.exists() else []), str(HERE / "tools" / "lazygit.yml")])
@@ -811,6 +818,7 @@ class Sidebar:
             pane = r["plugin_pane"]["pane"]["pane_id"]
             call("pane.resize", pane_id=pane, direction="left", amount=TOOL_SHARE - 0.5)
             self.tool, self.tool_check = (pane, index), None
+            self.tool_sticky = button.get("close_on_blur", True) is False
         except (OSError, ValueError, KeyError, HerdrError) as e:
             self.say(f"{prog}: {e}")
 
@@ -1065,7 +1073,7 @@ class Sidebar:
                                 call("pane.focus", pane_id=self.target)
                             except (OSError, ValueError, HerdrError):
                                 pass
-                        if self.tool and name == "pane_focused" and data.get("pane_id") != self.tool[0]:
+                        if self.tool and not self.tool_sticky and name == "pane_focused" and data.get("pane_id") != self.tool[0]:
                             # 等 0.4 秒再看：焦点还不在工具上才关（照 tmux 版，免得一闪而过的焦点变化把它关了）
                             self.tool_check = time.monotonic() + 0.4
                             self.later(0.45)
