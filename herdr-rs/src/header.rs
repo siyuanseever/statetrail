@@ -14,7 +14,7 @@ pub const SLOT: usize = 3; // 图标按钮占 3 格（空格 + 图标 + 空格�
 pub const GAP: usize = 1;
 
 /// 图标三档：(nerd, unicode, text)。文字档的字跟着界面语言。
-const ICONS: [(&str, &str, &str, &str); 13] = [
+const ICONS: [(&str, &str, &str, &str); 14] = [
     ("narrow", "\u{f101}", "»", ">>"),
     ("wide", "\u{f100}", "«", "<<"),
     ("bottom", "\u{f103}", "⇊", "End"),
@@ -28,6 +28,7 @@ const ICONS: [(&str, &str, &str, &str); 13] = [
     ("files", "\u{f07c}", "▤", ""),
     ("more", "\u{f141}", "⋯", "..."),
     ("shell", "\u{f120}", "›_", ""),
+    ("monitor", "\u{f201}", "▂▅", ""), // 折线图（nf-fa-line_chart）：btop
 ];
 
 static TIER: OnceLock<usize> = OnceLock::new();
@@ -68,8 +69,32 @@ pub fn text_tier() -> bool {
     TIER.get() == Some(&2)
 }
 
+/// 0 nerd / 1 unicode / 2 text。
+pub fn tier() -> usize {
+    *TIER.get().unwrap_or(&1)
+}
+
+/// 配置里的按钮：icon 是 ICONS 里的名字就按档位查表，否则当成字形原样用（文字档都不用）。
+pub fn button_icon(name: &str) -> String {
+    if text_tier() || name.is_empty() {
+        String::new()
+    } else if ICONS.iter().any(|r| r.0 == name) {
+        icon(name)
+    } else {
+        name.to_owned()
+    }
+}
+
+/// 插件的 manifest 里没有图标，认识的这几个由我们配：(nerd, unicode)。不认识的、配置里也没给图标的插件不上底部第一层，
+/// 在 ⋯ 弹出来的那一层里按名字列出。
+pub const PLUGIN_ICONS: [(&str, &str, &str); 3] = [
+    ("herdr-sidebar", "\u{f0db}", "▥"),      // 侧栏
+    ("herdr-file-viewer", "\u{f15c}", "▭"),  // 看文件
+    ("furkankly.zoetrope", "\u{f126}", "⋔"), // 会话流程图
+];
+
 pub fn icon(name: &str) -> String {
-    let tier = *TIER.get().unwrap_or(&1);
+    let tier = tier();
     let Some(row) = ICONS.iter().find(|r| r.0 == name) else {
         return String::new();
     };
@@ -80,26 +105,31 @@ pub fn icon(name: &str) -> String {
     }
 }
 
-pub type Button = (String, &'static str, usize); // (文字, 动作, 额外宽度)
+pub type Button = (String, String, usize); // (文字, 动作, 额外宽度)；动作是空的点了什么都不做（│）
 
 pub fn wide_buttons() -> Vec<Button> {
     vec![
-        (icon("narrow"), "narrow", 0),
-        (icon("bottom"), "bottom", 0),
-        (icon("usage"), "usage", 10),
+        (icon("narrow"), "narrow".into(), 0),
+        (icon("bottom"), "bottom".into(), 0),
+        (icon("usage"), "usage".into(), 10),
     ]
 }
 
 pub fn narrow_buttons() -> Vec<Button> {
     vec![
-        (icon("wide"), "wide", 0),
-        (icon("bottom"), "bottom", 0),
-        (icon("usage"), "usage", 0),
+        (icon("wide"), "wide".into(), 0),
+        (icon("bottom"), "bottom".into(), 0),
+        (icon("usage"), "usage".into(), 0),
     ]
 }
 
 fn cell_w(text: &str) -> usize {
     SLOT.max(text.width() + 2)
+}
+
+/// 一排按钮占多宽（按钮之间隔 GAP）。
+pub fn cells_w(buttons: &[Button]) -> usize {
+    buttons.iter().map(|(t, _, e)| cell_w(t) + e).sum::<usize>() + GAP * buttons.len().saturating_sub(1)
 }
 
 pub fn buttons_line(buttons: &[Button], u: Option<&Usage>, usage_known: bool) -> SLine {
@@ -111,7 +141,7 @@ pub fn buttons_line(buttons: &[Button], u: Option<&Usage>, usage_known: bool) ->
         let w = cell_w(text);
         let pad = (w - text.width()) / 2;
         out.push((format!("{}{text}{}", " ".repeat(pad), " ".repeat(w - text.width() - pad)), None));
-        if *act == "usage" && *extra > 0 {
+        if act == "usage" && *extra > 0 {
             let st = if usage_known {
                 render::usage_state(u)
             } else {
@@ -124,12 +154,12 @@ pub fn buttons_line(buttons: &[Button], u: Option<&Usage>, usage_known: bool) ->
 }
 
 /// 第几列（从 1 数）落在哪个按钮上；点偏一格也算（格子本身就比图标宽）。
-pub fn button_at(buttons: &[Button], col: usize) -> Option<&'static str> {
+pub fn button_at(buttons: &[Button], col: usize) -> Option<&str> {
     let mut x = 1;
     for (text, act, extra) in buttons {
         let w = cell_w(text) + extra;
         if (x..x + w).contains(&col) {
-            return Some(act);
+            return (!act.is_empty()).then_some(act.as_str());
         }
         x += w + GAP;
     }

@@ -1,6 +1,8 @@
 # statetrail（herdr 版，Rust 重写，开发中）：Claude Code 会话轨迹，停在 Claude 窗格右边。
 # 和 ../herdr/（Python 版，v0.1.4 冻结）是同一个插件 id，同一时间只 link 其中一个。
-# 开发：cargo build --release && mkdir -p bin && cp target/release/statetrail bin/，再 herdr plugin link 这个目录
+# 开发：cargo build --release && mkdir -p bin && cp target/release/statetrail bin/.new && mv bin/.new bin/statetrail，
+# 再 herdr plugin link 这个目录。别直接 cp 盖掉 bin/statetrail：macOS 上原地改写的程序一跑就被系统杀掉（退出码 137），
+# 开着的轨迹试跑新程序失败，就不会原地换上它
 id = "statetrail"
 name = "statetrail"
 version = "0.2.0-dev"
@@ -28,3 +30,19 @@ id = "trail"
 title = "statetrail"
 placement = "split"
 command = ["bin/statetrail", "pane"]
+
+# 底部的自定义按钮（配置里的 [[buttons]]，默认 Git = lazygit、文件 = yazi、命令行、监视器 = btop）：轨迹把它从 Claude
+# 下面切出来（占 Claude 那一格高度的 height / tool_height），除了命令行都是点外面就关。命令经 STATETRAIL_CMD 传进来。
+[[panes]]
+id = "tool"
+title = "Tool"
+placement = "split"
+# 目录进不去（被删了）就在家目录里开，别让窗格一闪就没了
+command = ["sh", "-c", "cd \"${STATETRAIL_CWD:-$PWD}\" 2>/dev/null || cd \"$HOME\"; exec sh -c \"$STATETRAIL_CMD\""]
+
+# 底部 ⋯：列出其他 herdr 插件的所有 action，点一下就运行（statetrail menu，选中的那一条交回轨迹去调）
+[[panes]]
+id = "menu"
+title = "plugins"
+placement = "popup"
+command = ["bin/statetrail", "menu"]

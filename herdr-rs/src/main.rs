@@ -7,8 +7,10 @@ mod herdr;
 mod i18n;
 mod jump;
 mod pane;
+mod picker;
 mod render;
 mod theme;
+mod tools;
 mod transcript;
 mod ui;
 
@@ -54,7 +56,7 @@ fn config_dir() -> PathBuf {
         .unwrap_or_else(|| home().join(".config/herdr/plugins/config").join(plugin_id()))
 }
 
-/// 配置（<配置目录>/config.toml），和 Python 版同名同义；这一步只用到这几项，文件不在或写坏了就全用默认值。
+/// 配置（<配置目录>/config.toml），和 Python 版同名同义；文件不在或写坏了就全用默认值。
 #[derive(Clone)]
 pub struct Config {
     pub auto_open: bool,
@@ -64,6 +66,94 @@ pub struct Config {
     pub icons: String,    // "auto"（装了 Nerd Font 就用它的图标）/ "nerd" / "unicode" / "text"
     pub live_usage: bool, // 实时查额度（读 Claude Code 存在钥匙串里的令牌）；false 只读缓存
     pub tab_names: bool,  // 没手动起过名的 tab，用 Claude 的会话名命名
+    pub buttons: Vec<ToolButton>,
+    pub tool_height: f64,     // 按钮开的工具占 Claude 那一格高度的比例（按钮自己没写 height 时）
+    pub plugin_buttons: bool, // 底部在自己的按钮后面（│ 隔开）列出装了的其他 herdr 插件
+    pub plugins: HashMap<String, PluginCfg>,
+}
+
+/// 底部的自定义按钮（配置里的 [[buttons]]），和 Python 版 DEFAULTS["buttons"] 同义：
+/// command 在 Claude 那一格的目录里开本插件的 tool 窗格跑它（经 sh -c）；action（"插件 id.动作 id"）调别的 herdr 插件。
+#[derive(Clone)]
+pub struct ToolButton {
+    pub label: String,
+    pub command: String,
+    pub action: String,
+    pub icon: String,        // header::ICONS 里的名字按档位取字形，别的当字形原样用
+    pub height: Option<f64>, // Git、文件要看的东西多，给到 herdr 允许的最大 0.9；命令行一半就够
+    pub pick_repo: bool,     // 目录不在仓库里时先列出下面一两层的仓库让你点一个
+    pub close_on_blur: bool, // 点外面就关；命令行不关：跑到一半的 ssh 不能因为点了一下 Claude 就没了
+}
+
+/// [plugins."<插件 id>"]：藏掉、换绑、换图标、换名字。
+#[derive(Clone, Default)]
+pub struct PluginCfg {
+    pub hidden: bool,
+    pub action: String,
+    pub icon: String,
+    pub label: String,
+}
+
+fn default_buttons() -> Vec<ToolButton> {
+    let b = |label: &str, command: &str, icon: &str, height: Option<f64>, pick_repo: bool, close_on_blur: bool| ToolButton {
+        label: label.into(),
+        command: command.into(),
+        action: String::new(),
+        icon: icon.into(),
+        height,
+        pick_repo,
+        close_on_blur,
+    };
+    vec![
+        b("Git", "lazygit", "git", Some(0.9), true, true),
+        b("文件", "yazi", "files", Some(0.9), false, true),
+        b("命令行", "$SHELL", "shell", None, false, false),
+        // btop：看 CPU / 内存 / 进程、结束进程（实时总览在 herdr 顶部标签栏右侧的状态区，那是 herdr 自己的配置）
+        b("监视器", "btop", "monitor", Some(0.9), false, true),
+    ]
+}
+
+fn parse_buttons(v: &toml::Value) -> Vec<ToolButton> {
+    let s = |b: &toml::Value, k: &str| b.get(k).and_then(toml::Value::as_str).unwrap_or("").to_owned();
+    v.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|b| {
+            let btn = ToolButton {
+                label: s(b, "label"),
+                command: s(b, "command"),
+                action: s(b, "action"),
+                icon: s(b, "icon"),
+                height: b
+                    .get("height")
+                    .and_then(|h| h.as_float().or_else(|| h.as_integer().map(|i| i as f64))),
+                pick_repo: b.get("pick_repo").and_then(toml::Value::as_bool).unwrap_or(false),
+                close_on_blur: b.get("close_on_blur").and_then(toml::Value::as_bool).unwrap_or(true),
+            };
+            let action_ok = btn.action.rsplit_once('.').is_some_and(|(p, a)| !p.is_empty() && !a.is_empty());
+            (!btn.label.is_empty() && (!btn.command.is_empty() || action_ok)).then_some(btn)
+        })
+        .collect()
+}
+
+fn parse_plugins(v: Option<&toml::Value>) -> HashMap<String, PluginCfg> {
+    let s = |t: &toml::Table, k: &str| t.get(k).and_then(toml::Value::as_str).unwrap_or("").to_owned();
+    v.and_then(toml::Value::as_table)
+        .into_iter()
+        .flatten()
+        .filter_map(|(id, t)| {
+            let t = t.as_table()?;
+            Some((
+                id.clone(),
+                PluginCfg {
+                    hidden: t.get("hidden").and_then(toml::Value::as_bool).unwrap_or(false),
+                    action: s(t, "action"),
+                    icon: s(t, "icon"),
+                    label: s(t, "label"),
+                },
+            ))
+        })
+        .collect()
 }
 
 pub fn config() -> Config {
@@ -87,6 +177,13 @@ pub fn config() -> Config {
             .to_owned(),
         live_usage: table.get("live_usage").and_then(toml::Value::as_bool).unwrap_or(true),
         tab_names: table.get("tab_names").and_then(toml::Value::as_bool).unwrap_or(true),
+        buttons: table.get("buttons").map_or_else(default_buttons, parse_buttons),
+        tool_height: table
+            .get("tool_height")
+            .and_then(toml::Value::as_float)
+            .map_or(0.5, |h| h.clamp(0.1, 0.9)),
+        plugin_buttons: table.get("plugin_buttons").and_then(toml::Value::as_bool).unwrap_or(true),
+        plugins: parse_plugins(table.get("plugins")),
     }
 }
 
@@ -256,6 +353,8 @@ fn main() {
         Some("pane") => pane::run(cfg),
         Some("auto") => cmd_auto(&cfg),
         Some("toggle") => cmd_toggle(&cfg),
+        Some("menu") => picker::cmd_menu(),
+        Some("pickrepo") => picker::cmd_pickrepo(&std::env::args().nth(2).unwrap_or_default()),
         Some("version") => println!("statetrail {}", env!("CARGO_PKG_VERSION")),
         // 开发用：按 ⟳ 的规矩查一次额度（statetrail refresh-usage <配置目录> [force]）
         Some("refresh-usage") => {

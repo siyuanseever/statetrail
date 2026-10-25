@@ -6,7 +6,7 @@ use crossterm::{execute, terminal};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use serde_json::{Value, json};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
@@ -19,6 +19,7 @@ use crate::header;
 use crate::i18n::t;
 use crate::jump::{self, Outcome, Term};
 use crate::render;
+use crate::tools::{self, Plugin, sh_quote};
 use crate::transcript::Transcript;
 use crate::ui::{self, Item};
 use crate::{Config, FRAME, WIDE_MIN, claude, herdr};
@@ -35,8 +36,9 @@ enum Msg {
     HerdrGone,
     Command(String),
     Flash(String, Duration),
-    Jumped(String, String), // (轮次 id, 结果)
-    Wake,                   // 后台查完额度了：重画
+    Jumped(String, String),            // (轮次 id, 结果)
+    Wake,                              // 后台查完额度了：重画
+    PluginTab(String, String, String), // (插件, 动作, 它开出来的标签页)
 }
 
 fn sock_of(pane: &str) -> PathBuf {
@@ -109,23 +111,40 @@ struct Trail {
     titled: Option<String>, // 上次拿来给 tab 起名的会话名
     code: CodeSig,          // 启动时的程序
     code_new: Option<CodeSig>,
-    restart: Option<PathBuf>, // 插件更新了：主循环退出后在这一格原地换成这个目录里的程序
+    restart: Option<PathBuf>,      // 插件更新了：主循环退出后在这一格原地换成这个目录里的程序
+    tool: Option<(String, usize)>, // 开着的工具：(窗格, 第几个按钮)
+    tool_check: Option<Instant>,   // 焦点离开了工具：到这个时候再看一眼，还不在它上面就关
+    tool_sticky: bool,             // 这个工具点外面不关（命令行）
+    plugins: Vec<Plugin>,
+    plugins_mtime: Option<std::time::SystemTime>,
+    plugin_tabs: HashMap<(String, String), String>, // (插件, 动作) → 它开出来的标签页：再点直接切过去
+    foot_rows: Vec<Vec<header::Button>>,
+    foot_shift: (usize, usize), // (▼ 在底部第几行, 那一行的按钮往右挪了几列)
 }
 
 type CodeSig = (PathBuf, Option<std::time::SystemTime>);
 
+/// herdr 的插件登记：装、卸、开、关插件都会写它。
+fn registry_path() -> PathBuf {
+    std::env::var_os("HERDR_PLUGIN_CONFIG_DIR")
+        .map(PathBuf::from)
+        .and_then(|c| c.ancestors().nth(3).map(|h| h.join("plugins.json")))
+        .unwrap_or_else(|| crate::home().join(".config/herdr/plugins.json"))
+}
+
+/// 这个程序所在的插件目录（bin/statetrail 的上一级）。
+fn plugin_root() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent()?.parent().map(PathBuf::from))
+        .unwrap_or_default()
+}
+
 /// (herdr 登记的插件目录, 那里 bin/statetrail 的修改时间)。herdr plugin update 会装进一个新目录，旧目录里的文件不变，
 /// 所以要看 herdr 的登记（plugins.json）；本地 link 的目录换了新编译的程序，修改时间会变。
 fn code_sig() -> CodeSig {
-    let here = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent()?.parent().map(PathBuf::from))
-        .unwrap_or_default();
-    let registry = std::env::var_os("HERDR_PLUGIN_CONFIG_DIR")
-        .map(PathBuf::from)
-        .and_then(|c| c.ancestors().nth(3).map(|h| h.join("plugins.json")))
-        .unwrap_or_else(|| crate::home().join(".config/herdr/plugins.json"));
-    let root = std::fs::read(&registry)
+    let here = plugin_root();
+    let root = std::fs::read(registry_path())
         .ok()
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
         .and_then(|v| {
@@ -214,7 +233,22 @@ impl Trail {
 
     fn act(&mut self, act: &str, width: u16, tx: &Sender<Msg>) {
         match act {
-            "usage" => self.kick_usage(true, tx),
+            "usage" => {
+                self.kick_usage(true, tx);
+                self.plugins = tools::load_plugins(&self.cfg); // 刚装 / 刚卸的插件，点一下 ⟳ 底部就跟上
+            }
+            "plugmenu" => self.plugin_menu(),
+            a if a.starts_with("plug:") => {
+                if let Some(p) = a[5..].parse::<usize>().ok().and_then(|i| self.plugins.get(i)) {
+                    let (id, action) = (p.id.clone(), p.action.clone());
+                    self.run_plugin(&id, &action, tx);
+                }
+            }
+            a if a.starts_with("tool:") => {
+                if let Ok(i) = a[5..].parse::<usize>() {
+                    self.run_tool(i);
+                }
+            }
             "bottom" => {
                 self.jump_token.fetch_add(1, Ordering::SeqCst);
                 HerdrTerm {
@@ -238,8 +272,8 @@ impl Trail {
         }
         if ln == 1 {
             let buttons = if narrow { header::narrow_buttons() } else { header::wide_buttons() };
-            if let Some(a) = header::button_at(&buttons, col) {
-                self.act(a, width, tx);
+            if let Some(a) = header::button_at(&buttons, col).map(str::to_owned) {
+                self.act(&a, width, tx);
             }
         } else if narrow || ln != self.head_ln {
             self.kick_usage(true, tx);
@@ -360,6 +394,347 @@ impl Trail {
         self.flash = Some((msg, Instant::now() + secs));
     }
 
+    /// 底部：自己的按钮，后面（│ 隔开）是其他 herdr 插件的按钮，放不下的收进 ⋯。▼ 放在按钮行最前面；窄版放不下
+    /// （三个按钮就占了 13 列里的 12 列），▼ 放在第二行最前面（插件那一行，没插件就单独一行）。工具开着时底部不变：
+    /// 不高亮、不加关闭按钮，再点一次同一个按钮就关（用户定的）。和 Python 版 footer 一样。
+    fn footer_rows(&self, narrow: bool, room: usize, slot: usize) -> (Vec<Vec<header::Button>>, usize) {
+        let shift = if slot > 0 { slot + 1 } else { 0 };
+        let tools: Vec<header::Button> = self
+            .cfg
+            .buttons
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                let ic = header::button_icon(&b.icon);
+                (if ic.is_empty() { t(&b.label) } else { ic }, format!("tool:{i}"), 0)
+            })
+            .collect();
+        // 第一层只放有图标的插件；icons = "text"（全写成字）时照样写名字。没图标的只在 ⋯ 里（按名字列出）
+        let text = header::text_tier();
+        let plug: Vec<header::Button> = self
+            .plugins
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| !p.icon.is_empty() || text)
+            .map(|(i, p)| {
+                (
+                    if p.icon.is_empty() { p.label.clone() } else { p.icon.clone() },
+                    format!("plug:{i}"),
+                    0,
+                )
+            })
+            .collect();
+        let hidden = plug.len() < self.plugins.len();
+        let room = room.saturating_sub(shift);
+        let fit = |head: Vec<header::Button>| -> Vec<header::Button> {
+            let more = (header::icon("more"), "plugmenu".to_owned(), 0);
+            let mut all = head.clone();
+            all.extend(plug.iter().cloned());
+            if !hidden && header::cells_w(&all) <= room {
+                return all;
+            }
+            let mut keep = head;
+            for c in &plug {
+                let mut trial = keep.clone();
+                trial.extend([c.clone(), more.clone()]);
+                if header::cells_w(&trial) > room {
+                    break;
+                }
+                keep.push(c.clone());
+            }
+            keep.push(more);
+            keep
+        };
+        if narrow {
+            // 第一行放得下几个工具就放几个（默认四个只放得下三个），剩下的挪到第二行，排在插件前面
+            let full = room + shift;
+            let mut first: Vec<header::Button> = Vec::new();
+            let mut rest: Vec<header::Button> = Vec::new();
+            for b in tools {
+                let mut trial = first.clone();
+                trial.push(b.clone());
+                if rest.is_empty() && (first.is_empty() || header::cells_w(&trial) <= full) {
+                    first = trial;
+                } else {
+                    rest.push(b);
+                }
+            }
+            let mut rows = vec![first];
+            if !self.plugins.is_empty() {
+                rows.push(fit(rest));
+            } else if !rest.is_empty() || slot > 0 {
+                rows.push(rest);
+            }
+            let at = rows.len() - 1;
+            (rows, at)
+        } else if self.plugins.is_empty() {
+            (vec![tools], 0)
+        } else {
+            let mut head = tools;
+            if !head.is_empty() {
+                head.push(("│".into(), String::new(), 0));
+            }
+            (vec![fit(head)], 0)
+        }
+    }
+
+    /// 配置里的按钮。command：在 Claude 那一格的目录里开本插件的 tool 窗格，经 sh -c 跑它；
+    /// action：调别的 herdr 插件的动作，先把焦点交回 Claude（点轨迹时焦点到了轨迹上，对方插件按焦点干活）。
+    fn run_tool(&mut self, index: usize) {
+        let Some(button) = self.cfg.buttons.get(index).cloned() else {
+            return;
+        };
+        if button.command.is_empty() {
+            if let Some((plugin, action)) = button.action.rsplit_once('.') {
+                let _ = herdr::call("pane.focus", json!({"pane_id": self.target}));
+                let r = herdr::call(
+                    "plugin.action.invoke",
+                    json!({"plugin_id": plugin, "action_id": action,
+                           "context": {"focused_pane_id": self.target, "invocation_source": crate::plugin_id()}}),
+                );
+                if let Err(e) = r {
+                    self.say(format!("{}: {e}", button.action), Duration::from_secs(6));
+                }
+            }
+            return;
+        }
+        if let Some((_, open)) = self.tool {
+            // 再点同一个按钮 = 关；点另一个 = 换过去
+            self.close_tool(true);
+            if open == index {
+                return;
+            }
+        }
+        let shell = std::env::var("SHELL")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "/bin/sh".into());
+        let mut cmd = button.command.clone();
+        let first = cmd.split_whitespace().next().unwrap_or("").trim_matches(['\'', '"']);
+        let prog = first.replace("${SHELL}", &shell).replace("$SHELL", &shell); // 命令行按钮的 "$SHELL"：你的登录 shell
+        if !tools::which(&prog) {
+            // 默认按钮的几个工具 Homebrew 里都有同名的包：顺手说怎么装
+            let brew = cfg!(target_os = "macos") && ["lazygit", "yazi", "btop"].contains(&prog.as_str());
+            let msg = if brew {
+                t("找不到 {p}，可以用 brew install {p} 装上")
+            } else {
+                t("找不到 {p}")
+            };
+            self.say(msg.replace("{p}", &prog), Duration::from_secs(8));
+            return;
+        }
+        let want = herdr::pane_info(&self.target)
+            .and_then(|i| i["foreground_cwd"].as_str().map(str::to_owned))
+            .unwrap_or_default();
+        let cwd = if want.is_empty() { String::new() } else { tools::live_dir(&want) };
+        if !want.is_empty() && cwd != want {
+            // 不然 cd 失败，窗格一闪就关，什么也看不到（Python 版用户 2026-10-25 报的）
+            let home = crate::home().to_string_lossy().into_owned();
+            let short = match cwd.strip_prefix(&home) {
+                Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("~{rest}"),
+                _ => cwd.clone(),
+            };
+            self.say(
+                t("Claude 的目录已经不在了，改在 {d} 打开").replace("{d}", &short),
+                Duration::from_secs(8),
+            );
+        }
+        let lazygit = prog == "lazygit";
+        if button.pick_repo && lazygit && !cwd.is_empty() && tools::git_root(&cwd).is_none() {
+            // 不在仓库里：下面只有一个仓库就直接开它，好几个就先让你点一个（statetrail pickrepo），一个都没有就只提示
+            let repos = tools::find_repos(std::path::Path::new(&cwd), 2);
+            match repos.len() {
+                0 => {
+                    self.say(t("这里没有 Git 仓库"), Duration::from_secs(6));
+                    return;
+                }
+                1 => cmd = format!("exec lazygit -p {}", sh_quote(&repos[0].to_string_lossy())),
+                _ => {
+                    let file = self.run_file("repos");
+                    let list: String = repos.iter().map(|r| format!("{}\n", r.display())).collect();
+                    let _ = std::fs::write(&file, list);
+                    let exe = std::env::current_exe().unwrap_or_default();
+                    cmd = format!(
+                        "exec {} pickrepo {}",
+                        sh_quote(&exe.to_string_lossy()),
+                        sh_quote(&file.to_string_lossy())
+                    );
+                }
+            }
+        }
+        let mut env = json!({"STATETRAIL_CWD": cwd, "STATETRAIL_CMD": cmd,
+                             "PATH": std::env::var("PATH").unwrap_or_default(), "SHELL": shell});
+        if lazygit {
+            // 在最外层按 Esc 也退出，和 yazi 一样（叠加在你自己的配置后面）
+            let dir = std::process::Command::new("lazygit")
+                .arg("--print-config-dir")
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+                .unwrap_or_default();
+            let mine = PathBuf::from(if dir.is_empty() { "/nonexistent" } else { &dir }).join("config.yml");
+            let ours = plugin_root().join("tools/lazygit.yml");
+            let mut files: Vec<String> = Vec::new();
+            if mine.exists() {
+                files.push(mine.to_string_lossy().into_owned());
+            }
+            files.push(ours.to_string_lossy().into_owned());
+            env["LG_CONFIG_FILE"] = json!(files.join(","));
+        }
+        // 从 Claude 下面切出来，占 Claude 那一格高度的 height：Claude 宽度不变、只是变矮，轨迹一直露在旁边能点。
+        // 没用的两条路：herdr 的 overlay 会盖满整个标签页，连轨迹一起盖住；popup 只能居中，开着时整个会话只认它，
+        // 轨迹点不了、点外面也不关（Python 版 2026-10-25 实测）。
+        let r = herdr::call(
+            "plugin.pane.open",
+            json!({"plugin_id": crate::plugin_id(), "entrypoint": "tool", "placement": "split",
+                   "target_pane_id": self.target, "direction": "down", "focus": true, "env": env}),
+        );
+        let pane = match r.as_ref().map(|r| r["plugin_pane"]["pane"]["pane_id"].as_str()) {
+            Ok(Some(p)) => p.to_owned(),
+            Ok(None) => {
+                self.say(format!("{prog}: no pane"), Duration::from_secs(6));
+                return;
+            }
+            Err(e) => {
+                self.say(format!("{prog}: {e}"), Duration::from_secs(6));
+                return;
+            }
+        };
+        // 切出来是对半分；挪中间那条线：工具要高就把工具往上推，要矮就把 Claude 往下推（只挪两格之间那条线）
+        let h = button.height.unwrap_or(self.cfg.tool_height).clamp(0.1, 0.9);
+        if h > 0.5 {
+            let _ = herdr::call("pane.resize", json!({"pane_id": pane, "direction": "up", "amount": h - 0.5}));
+        } else if h < 0.5 {
+            let _ = herdr::call(
+                "pane.resize",
+                json!({"pane_id": self.target, "direction": "down", "amount": 0.5 - h}),
+            );
+        }
+        self.tool = Some((pane, index));
+        self.tool_check = None;
+        self.tool_sticky = !button.close_on_blur;
+    }
+
+    /// 关掉开着的工具；Claude 那一格自己长回原来的高度，焦点还给 Claude。
+    fn close_tool(&mut self, focus: bool) {
+        if let Some((pane, _)) = self.tool.take() {
+            let _ = herdr::call("pane.close", json!({"pane_id": pane}));
+            if focus {
+                let _ = herdr::call("pane.focus", json!({"pane_id": self.target}));
+            }
+        }
+        self.tool_check = None;
+    }
+
+    /// 焦点离开工具 0.4 秒后：焦点（这个 tab 里）还不在工具上就关（照 tmux 版，免得一闪而过的焦点变化把它关了）。
+    fn check_tool(&mut self) {
+        self.tool_check = None;
+        let Some((pane, _)) = &self.tool else { return };
+        let tab = herdr::pane_info(&self.target).and_then(|i| i["tab_id"].as_str().map(str::to_owned));
+        let focused = herdr::call("pane.list", json!({})).ok().and_then(|r| {
+            r["panes"]
+                .as_array()?
+                .iter()
+                .find(|p| p["focused"].as_bool() == Some(true) && p["tab_id"].as_str() == tab.as_deref())
+                .and_then(|p| p["pane_id"].as_str().map(str::to_owned))
+        });
+        if focused.as_deref() != Some(pane.as_str()) {
+            self.close_tool(true);
+        }
+    }
+
+    /// 调别的插件的 action：先把焦点交回 Claude（对方插件按焦点干活，比如 zoetrope 画的是焦点所在那个 agent 的会话）。
+    /// 插件要是开了一个新标签页，就切过去并记下来：再点同一个按钮直接切到那一页，不再开第二个。只开窗格、不开标签页的
+    /// 插件（比如 sidebar）不记，照旧每次都调。
+    fn run_plugin(&mut self, plugin: &str, action: &str, tx: &Sender<Msg>) {
+        let key = (plugin.to_owned(), action.to_owned());
+        let tabs = || -> Vec<String> {
+            herdr::call("tab.list", json!({}))
+                .ok()
+                .and_then(|r| {
+                    r["tabs"]
+                        .as_array()
+                        .map(|a| a.iter().filter_map(|t| t["tab_id"].as_str().map(str::to_owned)).collect())
+                })
+                .unwrap_or_default()
+        };
+        let before = tabs();
+        if let Some(tab) = self.plugin_tabs.get(&key) {
+            if before.contains(tab) {
+                let _ = herdr::call("tab.focus", json!({"tab_id": tab}));
+                return;
+            }
+            self.plugin_tabs.remove(&key); // 那一页已经被你关了：重新开
+        }
+        let _ = herdr::call("pane.focus", json!({"pane_id": self.target}));
+        let r = herdr::call(
+            "plugin.action.invoke",
+            json!({"plugin_id": plugin, "action_id": action,
+                   "context": {"focused_pane_id": self.target, "invocation_source": crate::plugin_id()}}),
+        );
+        if let Err(e) = r {
+            self.say(format!("{plugin}: {e}"), Duration::from_secs(6));
+            return;
+        }
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            // 插件的命令是另起进程跑的，新标签页过一会儿才出现：最多看 3 秒
+            for _ in 0..30 {
+                std::thread::sleep(Duration::from_millis(100));
+                if let Some(new) = tabs().into_iter().find(|t| !before.contains(t)) {
+                    let _ = herdr::call("tab.focus", json!({"tab_id": new}));
+                    let _ = tx.send(Msg::PluginTab(key.0, key.1, new));
+                    return;
+                }
+            }
+        });
+    }
+
+    /// ⋯：用 herdr 的 popup 列出所有插件的所有 action（statetrail menu），选中的那一条经 socket 送回来再调。
+    /// popup 开着时整个会话只认它，所以不在 popup 里直接调：等它关了，这边再调。
+    fn plugin_menu(&mut self) {
+        let rows: Vec<String> = self
+            .plugins
+            .iter()
+            .flat_map(|p| {
+                p.actions
+                    .iter()
+                    .map(move |(a, title)| format!("{}\t{a}\t{}  {title}", p.id, p.label))
+            })
+            .collect();
+        if rows.is_empty() {
+            return;
+        }
+        let file = self.run_file("menu");
+        let _ = std::fs::write(&file, rows.join("\n") + "\n");
+        let widest = rows
+            .iter()
+            .map(|r| unicode_width::UnicodeWidthStr::width(r.rsplit('\t').next().unwrap_or("")))
+            .max()
+            .unwrap_or(0);
+        let r = herdr::call(
+            "plugin.pane.open",
+            json!({"plugin_id": crate::plugin_id(), "entrypoint": "menu", "placement": "popup", "focus": true,
+                   "width": (widest + 8).clamp(40, 100), "height": (rows.len() + 4).min(30),
+                   "env": {"STATETRAIL_MENU": file, "STATETRAIL_SOCK": sock_of(&self.me),
+                           "PATH": std::env::var("PATH").unwrap_or_default()}}),
+        );
+        if let Err(e) = r {
+            self.say(format!("⋯: {e}"), Duration::from_secs(6));
+        }
+    }
+
+    /// herdr 的插件登记（plugins.json）改过没有：装、卸、开、关插件都会写它。只看修改时间，不问 herdr。
+    fn plugins_changed(&mut self) -> bool {
+        let m = std::fs::metadata(registry_path()).and_then(|m| m.modified()).ok();
+        let changed = self.plugins_mtime.is_some() && m != self.plugins_mtime;
+        self.plugins_mtime = m;
+        changed
+    }
+
+    fn run_file(&self, ext: &str) -> PathBuf {
+        crate::run_dir().join(format!("{}.{ext}", self.me.replace(':', "_")))
+    }
+
     fn save_reg(&self) {
         let _ = std::fs::create_dir_all(crate::run_dir());
         let reg = json!({"sidebar": self.me, "target": self.target, "pid": std::process::id()});
@@ -451,9 +826,11 @@ fn spawn_threads(tx: &Sender<Msg>, target: &str, me: &str) {
             }
         }
     });
-    // 订阅这个 Claude 的状态变化、窗格关闭。pane.updated 不订：不能按窗格过滤，别的插件会一直把这里叫醒
+    // 订阅这个 Claude 的状态变化、窗格关闭。pane.updated 不订：不能按窗格过滤，别的插件会一直把这里叫醒。
+    // pane.focused：工具窗格开着时，点了别处（焦点挪走）就关掉它，和 tmux 版「点浮窗外面就关」一样
     let events = tx.clone();
-    let subs = json!([{"type": "pane.agent_status_changed", "pane_id": target}, {"type": "pane.closed"}, {"type": "pane.exited"}]);
+    let subs = json!([{"type": "pane.agent_status_changed", "pane_id": target}, {"type": "pane.closed"},
+                      {"type": "pane.exited"}, {"type": "pane.focused"}]);
     std::thread::spawn(move || {
         if let Ok(it) = herdr::subscribe(subs) {
             for ev in it {
@@ -533,6 +910,14 @@ pub fn run(cfg: Config) {
         code: code_sig(),
         code_new: None,
         restart: None,
+        tool: None,
+        tool_check: None,
+        tool_sticky: false,
+        plugins: Vec::new(),
+        plugins_mtime: None,
+        plugin_tabs: HashMap::new(),
+        foot_rows: Vec::new(),
+        foot_shift: (0, 0),
     };
     s.save_reg();
     // 右键固定交给 herdr 的菜单：轨迹自己不用右键
@@ -541,6 +926,8 @@ pub fn run(cfg: Config) {
     spawn_threads(&tx, &target, &me);
     s.refresh();
     s.kick_usage(false, &tx);
+    s.plugins_changed(); // 先记下 plugins.json 现在的样子，之后变了才重读
+    s.plugins = tools::load_plugins(&s.cfg);
 
     wait_for_size(&me);
     let mut out = std::io::stdout();
@@ -548,6 +935,7 @@ pub fn run(cfg: Config) {
     let _ = execute!(out, terminal::EnterAlternateScreen, event::EnableMouseCapture);
     let mut term = Terminal::new(CrosstermBackend::new(out)).expect("terminal");
     let _ = run_loop(&mut s, &mut term, &tx, &rx);
+    s.close_tool(false);
     let _ = execute!(term.backend_mut(), event::DisableMouseCapture, terminal::LeaveAlternateScreen);
     let _ = terminal::disable_raw_mode();
     s.jump_token.fetch_add(1, Ordering::SeqCst);
@@ -556,6 +944,9 @@ pub fn run(cfg: Config) {
         let _ = std::fs::remove_file(crate::run_dir().join(format!("{}.json", me.replace(':', "_"))));
     }
     let _ = std::fs::remove_file(sock_of(&me));
+    for ext in ["menu", "repos"] {
+        let _ = std::fs::remove_file(s.run_file(ext));
+    }
     if let Some(root) = s.restart {
         use std::os::unix::process::CommandExt;
         let err = std::process::Command::new(root.join("bin/statetrail"))
@@ -577,6 +968,7 @@ fn run_loop(
     let mut due: Vec<Instant> = [200, 1000, 2000].iter().map(|ms| start + Duration::from_millis(*ms)).collect();
     let mut next_tick = Instant::now() + TICK;
     let mut next_check = Instant::now() + AGENT_CHECK;
+    let mut redraw = true;
     loop {
         // 画一帧
         let size = term.size()?;
@@ -600,7 +992,7 @@ fn run_loop(
         if s.flash.as_ref().is_some_and(|(_, until)| Instant::now() >= *until) {
             s.flash = None;
         }
-        {
+        if std::mem::replace(&mut redraw, true) {
             let (model, ctx) = s.model_ctx();
             let usage = claude::read_usage(&s.cfg_dir, s.sid.as_deref(), s.cfg.live_usage);
             let stops = s.tr.as_ref().map(|t| t.visible()).unwrap_or_default();
@@ -632,7 +1024,8 @@ fn run_loop(
                 header::wide(size.width as usize, &info).0.len()
             };
             // 列表露出来的范围决定 ▲ / ▼；窄版的 ▼ 要多一行底部，列表就少一行，所以最多算两遍
-            let mut foot_len = 1;
+            let foot_base = if narrow { s.footer_rows(true, room, 0).0.len() } else { 1 };
+            let mut foot_len = foot_base;
             let (mut slot, mut counts);
             loop {
                 let rows = (size.height as usize).saturating_sub(head_len + 1 + 1 + foot_len);
@@ -647,7 +1040,7 @@ fn run_loop(
                 } else {
                     0
                 };
-                let want = if narrow && slot > 0 { 2 } else { 1 };
+                let want = if narrow && slot > 0 { foot_base.max(2) } else { foot_base };
                 if want == foot_len {
                     break;
                 }
@@ -672,15 +1065,24 @@ fn run_loop(
                 lines
             };
             s.up_at = (slot > 0 && counts.0 > 0).then_some((head.len(), slot));
-            // 底部：宽版一行（第 4 步放按钮，▼ 在行首）；窄版三个按钮就占满了，▼ 在第二行
+            // 底部：宽版一行按钮，▼ 在行首；窄版三个按钮就占满了，▼ 在第二行（插件那一行）
             let down_tag = tag("▼", counts.1);
-            let mut footer: Vec<render::SLine> = vec![Vec::new()];
-            if foot_len == 2 {
-                footer.push(Vec::new());
-            }
-            let at = footer.len() - 1;
+            let (rows, at) = s.footer_rows(narrow, room, slot);
+            let mut footer: Vec<render::SLine> = rows
+                .iter()
+                .map(|r| {
+                    if r.is_empty() {
+                        Vec::new()
+                    } else {
+                        header::buttons_line(r, None, false)
+                    }
+                })
+                .collect();
             footer[at] = render::lead(std::mem::take(&mut footer[at]), &down_tag, slot);
+            let footer: Vec<render::SLine> = footer.into_iter().map(|l| render::clip_line(l, room)).collect();
             s.down_at = (slot > 0 && counts.1 > 0).then_some((at, slot));
+            s.foot_shift = (at, if slot > 0 { slot + 1 } else { 0 });
+            s.foot_rows = rows;
             let mut drawn = None;
             term.draw(|f| drawn = Some(ui::draw(f, &head, &footer, &view, s.offset)))?;
             if let Some(d) = drawn {
@@ -698,6 +1100,9 @@ fn run_loop(
         }
         if let Some((_, until)) = &s.flash {
             wake = wake.min(*until);
+        }
+        if let Some(t) = s.tool_check {
+            wake = wake.min(t);
         }
         let msg = rx.recv_timeout(wake.saturating_duration_since(now));
         let mut stale = false;
@@ -736,6 +1141,17 @@ fn run_loop(
                     let (row, col) = ((m.row - s.footer_top) as usize, (m.column as usize).saturating_sub(1));
                     if s.down_at.is_some_and(|(r, slot)| r == row && col <= slot + 1) {
                         s.page(1);
+                    } else {
+                        let col = if row == s.foot_shift.0 {
+                            col.saturating_sub(s.foot_shift.1)
+                        } else {
+                            col
+                        };
+                        // 行首给 ▼ 留了位置，按钮往右挪了这么多
+                        let act = s.foot_rows.get(row).and_then(|r| header::button_at(r, col)).map(str::to_owned);
+                        if let Some(a) = act {
+                            s.act(&a, size.width, tx);
+                        }
                     }
                 }
                 MouseEventKind::Down(MouseButton::Left) if m.row < s.header_len => {
@@ -757,12 +1173,28 @@ fn run_loop(
                 _ => {}
             },
             Ok(Msg::Input(Event::Resize(..))) => {}
-            Ok(Msg::Input(_)) => continue,
+            Ok(Msg::Input(_)) => {
+                redraw = false; // 键盘：轨迹不用
+                continue;
+            }
             Ok(Msg::Herdr(ev)) => {
                 let name = ev["event"].as_str().unwrap_or("").replace('.', "_");
                 let pane = ev["data"]["pane_id"].as_str().unwrap_or("");
                 if matches!(name.as_str(), "pane_closed" | "pane_exited") && pane == s.target {
                     return Ok(());
+                }
+                if matches!(name.as_str(), "pane_closed" | "pane_exited") && s.tool.as_ref().is_some_and(|(p, _)| p == pane) {
+                    // 在工具里按 q / Esc / exit 退出了，窗格自己关了；herdr 会把焦点给隔壁（轨迹），还给 Claude
+                    s.tool = None;
+                    s.tool_check = None;
+                    let _ = herdr::call("pane.focus", json!({"pane_id": s.target}));
+                }
+                if name == "pane_focused" {
+                    if s.tool.as_ref().is_some_and(|(p, _)| p != pane) && !s.tool_sticky {
+                        s.tool_check = Some(now + Duration::from_millis(400));
+                    }
+                    redraw = false; // 别的窗格换了焦点：不用重画
+                    continue;
                 }
                 if name == "pane_agent_status_changed" {
                     stale = true;
@@ -774,12 +1206,23 @@ fn run_loop(
             }
             Ok(Msg::HerdrGone) => return Ok(()), // herdr server 没了
             Ok(Msg::Command(c)) => {
-                if c.trim() == "toggle" {
-                    s.toggle(size.width);
+                let parts: Vec<&str> = c.split_whitespace().collect();
+                match parts.as_slice() {
+                    ["toggle"] => s.toggle(size.width),
+                    ["plugrun", plugin, action] => {
+                        std::thread::sleep(Duration::from_millis(200)); // ⋯ 的 popup 先关掉
+                        s.run_plugin(plugin, action, tx);
+                    }
+                    _ => {}
                 }
             }
             Ok(Msg::Flash(m, d)) => s.say(m, d),
             Ok(Msg::Wake) => {}
+            Ok(Msg::PluginTab(plugin, action, tab)) => {
+                s.plugin_tabs.insert((plugin, action), tab);
+                redraw = false;
+                continue;
+            }
             Ok(Msg::Jumped(ids, how)) => {
                 for id in ids.split(',') {
                     if how == "found" {
@@ -793,6 +1236,9 @@ fn run_loop(
             Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
         }
         let now = Instant::now();
+        if s.tool_check.is_some_and(|t| now >= t) {
+            s.check_tool();
+        }
         if now >= next_tick {
             next_tick = now + TICK;
             stale = true;
@@ -806,6 +1252,9 @@ fn run_loop(
             }
             if s.no_claude_since.is_none() && herdr::pane_info(&s.target).is_none_or(|i| i["agent"].as_str() != Some("claude")) {
                 stale = true;
+            }
+            if s.plugins_changed() {
+                s.plugins = tools::load_plugins(&s.cfg); // 装了 / 卸了别的 herdr 插件：底部的插件按钮跟上
             }
         }
         if due.iter().any(|d| *d <= now) {

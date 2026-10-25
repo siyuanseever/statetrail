@@ -2,7 +2,7 @@
 """给 Rust 版搭隔离的演示 herdr：借用 Python 版 herdr/demo/gif.py 的 --stage（假 $HOME、私有 tmux、假 Claude），
 只把 link 进去的插件目录换成 herdr-rs/。不改冻结的 Python 版。
 
-    cargo build --release && mkdir -p bin && cp target/release/statetrail bin/ && python3 demo/stage.py
+    cargo build --release && mkdir -p bin && cp target/release/statetrail bin/.new && mv bin/.new bin/statetrail && python3 demo/stage.py
     tmux -L herdrdemo attach -t demo        # 自己看；收掉：tmux -L herdrdemo kill-server 再 herdr server stop
 """
 import sys

@@ -54,3 +54,5 @@ Claude 的目录已经不在了，改在 {d} 打开	Claude's directory is gone; 
 点一下就运行，Esc 不选	click to run, Esc to cancel
 这里没有 Git 仓库	no Git repository here
 选一个仓库，Esc 退出	pick a repository, Esc to leave
+监视器	Monitor
+找不到 {p}，可以用 brew install {p} 装上	{p} not found; install it with brew install {p}
