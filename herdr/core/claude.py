@@ -110,14 +110,24 @@ def last_usage(path):
     上下文 = 最新一条主线（非子 Agent）回复的 input + cache_creation + cache_read + output token；
     如果它之后有压缩边界，就用边界记下的压缩后大小。effort：每条 assistant 记录顶层的 "effort"。
     """
-    try:
-        with open(path, "rb") as f:
-            f.seek(0, 2)
-            size = f.tell()
-            f.seek(max(0, size - TAIL_BYTES))
-            lines = f.read().splitlines()
-    except OSError:
-        return None, None, None
+    # 从尾巴往前找：先看最后 256 KB，找不到再翻倍，最多 TAIL_BYTES（每次 Claude 回复都会叫一次，别每次都读 4 MB）
+    span = 256 * 1024
+    while True:
+        try:
+            with open(path, "rb") as f:
+                f.seek(0, 2)
+                size = f.tell()
+                f.seek(max(0, size - span))
+                lines = f.read().splitlines()
+        except OSError:
+            return None, None, None
+        found = _last_usage(lines)
+        if found[0] is not None or span >= TAIL_BYTES or span >= size:
+            return found
+        span *= 2
+
+
+def _last_usage(lines):
     model = effort = None
     for raw in reversed(lines):
         try:

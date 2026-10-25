@@ -86,18 +86,21 @@ class ClaudeTranscript:
             return False
         if size < self.pos:                       # 被截断/重写了：从头来
             self.__init__(self.path)
+        # 一行一行地读、读一行解析一行，不把整个文件读进内存：几百 MB 的对话记录一次读进来再解码、切行，
+        # 峰值要好几 GB，Python 用过的内存又很少还给系统（实测 737 MB 的记录峰值 2.8 GB、读完还占 770 MB）
+        start = self.pos
         with open(self.path, "rb") as fh:
             fh.seek(self.pos)
-            data = fh.read()
-        end = data.rfind(b"\n") + 1               # 最后一行可能还没写完，留到下次
-        self.pos += end
+            for raw in fh:
+                if not raw.endswith(b"\n"):      # 最后一行可能还没写完，留到下次
+                    break
+                self.pos += len(raw)
+                try:
+                    self.feed(json.loads(raw.decode("utf-8", "replace")))
+                except ValueError:
+                    continue
         self.size = size
-        for line in data[:end].decode("utf-8", "replace").splitlines():
-            try:
-                self.feed(json.loads(line))
-            except ValueError:
-                continue
-        return end > 0
+        return self.pos > start
 
     def feed(self, e):
         t = e.get("type")
