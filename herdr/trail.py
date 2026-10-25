@@ -50,7 +50,7 @@ CONFIG_DIR = Path(os.environ.get("HERDR_PLUGIN_CONFIG_DIR")
 DEFAULTS = {
     "auto_open": True,             # 切到有 Claude 的 tab 时自动打开
     "default_mode": "wide",        # 打开时多宽：宽版（"wide"，width 那么宽）还是窄版（"narrow"，herdr 允许的最窄）
-    "width": 0.34,                 # 宽版占 Claude 那一格的比例
+    "width": 0.25,                 # 宽版占 Claude 那一格的比例（0.34 太宽了，用户 2026-10-25 说的）
     # 图标："auto"（默认）：本机装了 Nerd Font 就用 "nerd"，没装用 "unicode"；也可以直接写 "nerd" / "unicode" /
     # "text"（全部写成字）。装了不代表终端在用它，显示成方块就手动设 "unicode"
     "icons": "auto",

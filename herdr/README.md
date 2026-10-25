@@ -84,7 +84,7 @@ broken file means defaults.
 ```toml
 auto_open = true          # open by itself in a tab that has exactly one Claude
 default_mode = "wide"     # width when it opens: "wide" or "narrow"
-width = 0.34              # wide view, as a share of the Claude pane (Claude always keeps 110 columns)
+width = 0.25              # wide view, as a share of the Claude pane (Claude always keeps 110 columns)
 icons = "auto"            # "auto": Nerd Font icons if one is installed, else plain symbols;
                           # or "nerd" / "unicode" / "text". Installed is not in use: if you see boxes, set "unicode"
 live_usage = true         # also ask for live 5h / 7d quota with your Claude login (see below); false: never

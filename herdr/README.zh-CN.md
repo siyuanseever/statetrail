@@ -72,7 +72,7 @@ Claude Code 要用全屏界面（`/tui fullscreen`），跳转滚的就是它。
 ```toml
 auto_open = true          # tab 里正好有一个 Claude 时自己打开
 default_mode = "wide"     # 打开时多宽："wide" 或 "narrow"
-width = 0.34              # 宽版占 Claude 那一格的比例（总会给 Claude 留 110 列）
+width = 0.25              # 宽版占 Claude 那一格的比例（总会给 Claude 留 110 列）
 icons = "auto"            # "auto"：装了 Nerd Font 就用它的图标，没装用普通符号；也可以写 "nerd" / "unicode" / "text"
                           # 装了不代表终端在用它：显示成方块就手动设 "unicode"
 live_usage = true         # 用你的 Claude 登录实时查额度（见下）；false：从不
