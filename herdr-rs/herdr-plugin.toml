@@ -1,0 +1,30 @@
+# statetrail（herdr 版，Rust 重写，开发中）：Claude Code 会话轨迹，停在 Claude 窗格右边。
+# 和 ../herdr/（Python 版，v0.1.4 冻结）是同一个插件 id，同一时间只 link 其中一个。
+# 开发：cargo build --release && mkdir -p bin && cp target/release/statetrail bin/，再 herdr plugin link 这个目录
+id = "statetrail"
+name = "statetrail"
+version = "0.2.0-dev"
+min_herdr_version = "0.9.5"
+description = "Claude Code session trail docked to the right of the Claude pane (Rust rewrite, in development)."
+platforms = ["macos", "linux"]
+
+[[actions]]
+id = "toggle"
+title = "Toggle statetrail"
+description = "Open the trail beside the focused Claude Code pane, or switch it between the wide and the narrow layout."
+contexts = ["pane"]
+command = ["bin/statetrail", "toggle"]
+
+[[events]]
+on = "pane.agent_detected"
+command = ["bin/statetrail", "auto"]
+
+[[events]]
+on = "tab.focused"
+command = ["bin/statetrail", "auto"]
+
+[[panes]]
+id = "trail"
+title = "statetrail"
+placement = "split"
+command = ["bin/statetrail", "pane"]
