@@ -29,6 +29,12 @@ statetrail 管的是你正在用的这个会话：贴在运行中的 Claude 旁�
   Git 和文件点外面任何地方也会关。关掉后 Claude 恢复原来的高度、拿回焦点。开着一个时点另一个按钮就换过去，同时只开一个。
   第三个默认按钮 `›_` 是命令行，放 Claude 替你跑不了的命令（要输密码的 `sudo`、要在浏览器里登录的 `gcloud auth login`、
   交互式的 `ssh`）：起始目录是 Claude 的，点别处不关。
+- **装了的其他 herdr 插件，一点就开。** 底部在自己的按钮后面用 `│` 隔开，自动列出你装了、开着的其他 herdr 插件，
+  每个一个按钮，名字是插件名（`herdr-sidebar` → `sidebar`；窄版放在第二行，只写首字母）。按钮运行这个插件在这台机器上能用的
+  第一个 action，顺序按它自己的 manifest（herdr-sidebar 是 `open-sidebar`）。例外是 zoetrope：它的第一个 action 开的是 overlay，
+  而 herdr 的 overlay 会盖满整个标签页、连轨迹一起盖住，所以它的按钮改跑 `open-tab`（`open-split` 会把 Claude 从 83 列挤到 42 列；
+  新开一个标签页，这一页一点不动）。放不下的收进 `⋯`，点了弹出所有插件的所有 action，点哪个就运行哪个，`Esc` 不选。
+  插件列表在打开轨迹时和点 `⟳` 时读，不轮询。
 - **自己跟着更新。** `herdr plugin update` 之后，开着的轨迹十秒左右就会发现，在原来那一格里换成新代码重启，位置和宽度都不变，
   不用关了再开。
 
@@ -94,6 +100,16 @@ close_on_blur = false     # 点别处不关；exit，或再点一次按钮才关
 # [[buttons]]
 # label = "左栏"
 # action = "herdr-sidebar.open-sidebar"
+
+# 其他 herdr 插件的按钮（自动列出）。false：不列
+plugin_buttons = true
+# 按插件 id（herdr plugin list 里看）单独设：藏掉、换绑它的别的 action、换图标、换名字
+# [plugins."herdr-sidebar"]
+# action = "show-explorer"
+# icon = "◧"
+# label = "左栏"
+# [plugins."herdr-file-viewer"]
+# hidden = true
 ```
 
 ## 读什么、动什么

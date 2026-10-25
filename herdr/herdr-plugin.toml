@@ -34,11 +34,18 @@ placement = "split"
 command = ["python3", "trail.py", "pane"]
 
 
-# 底部的自定义按钮（配置里的 [[buttons]]，默认 Git = lazygit、文件 = yazi）：trail.py 把它开在 Claude 右边
-# （占 Claude 那一块的 60%），点外面就关。命令由 trail.py 经 STATETRAIL_CMD 传进来。
+# 底部的自定义按钮（配置里的 [[buttons]]，默认 Git = lazygit、文件 = yazi、命令行）：trail.py 把它从 Claude 下面切出来
+# （占 Claude 那一格高度的 tool_height），Git、文件点外面就关。命令由 trail.py 经 STATETRAIL_CMD 传进来。
 [[panes]]
 id = "tool"
 title = "Tool"
 placement = "split"
 # 目录进不去（被删了）就在家目录里开，别让窗格一闪就没了
 command = ["sh", "-c", "cd \"${STATETRAIL_CWD:-$PWD}\" 2>/dev/null || cd \"$HOME\"; exec sh -c \"$STATETRAIL_CMD\""]
+
+# 底部 ⋯：列出其他 herdr 插件的所有 action，点一下就运行（trail.py menu，选中的那一条交回轨迹去调）
+[[panes]]
+id = "menu"
+title = "plugins"
+placement = "popup"
+command = ["python3", "trail.py", "menu"]

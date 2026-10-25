@@ -51,3 +51,4 @@ fzf 要 {need} 以上，现在是 {have}	fzf {need}+ required, found {have}
 额度来自 Claude Code 的缓存；要实时查询，在配置里设 live_usage = true	quota from Claude Code's cache; set live_usage = true for live numbers
 Claude 的目录已经不在了，改在 {d} 打开	Claude's directory is gone; opening in {d}
 命令行	Shell
+点一下就运行，Esc 不选	click to run, Esc to cancel

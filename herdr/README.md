@@ -37,6 +37,14 @@ statetrail is for the session you are in: it stays beside the live Claude and fo
   button, `›_`, is a shell for the commands Claude can't run for you (`sudo` asking for a password,
   `gcloud auth login` in a browser, an interactive `ssh`): it starts in Claude's directory and stays open when you
   click elsewhere.
+- **Your other herdr plugins, one click away.** After your own buttons and a `│`, the bottom row lists the other
+  herdr plugins you have installed and enabled, one button each, named after the plugin (`herdr-sidebar` → `sidebar`;
+  the first letter only in the narrow view, on a second row). A button runs the plugin's first action that works on
+  this machine, in its manifest's order (herdr-sidebar: `open-sidebar`). Exception: zoetrope's first action opens an
+  overlay, and herdr's overlay covers the whole tab, trail included, so its button runs `open-tab` instead
+  (`open-split` would squeeze Claude from 83 to 42 columns; a new tab leaves this one untouched). What doesn't fit
+  goes into `⋯`, which pops up every action of every plugin: click one to run it, `Esc` to cancel. The list is read
+  when the trail opens and when you click `⟳`, never polled.
 - **Updates itself in place.** After `herdr plugin update`, each open trail notices within about ten seconds and
   restarts in the same pane with the new code, keeping its place and width. No need to close and reopen it.
 
@@ -103,6 +111,16 @@ close_on_blur = false     # stays open when you click elsewhere; exit, or click 
 # [[buttons]]
 # label = "Sidebar"
 # action = "herdr-sidebar.open-sidebar"
+
+# Buttons for your other herdr plugins (listed automatically). false: none.
+plugin_buttons = true
+# Per plugin, by its id (herdr plugin list): hide it, bind another of its actions, change its icon or name.
+# [plugins."herdr-sidebar"]
+# action = "show-explorer"
+# icon = "◧"
+# label = "side"
+# [plugins."herdr-file-viewer"]
+# hidden = true
 ```
 
 ## What it reads, what it touches

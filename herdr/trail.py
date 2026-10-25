@@ -71,6 +71,11 @@ DEFAULTS = {
                 {"label": "命令行", "command": "$SHELL", "icon": "shell", "close_on_blur": False}],
     # 按钮开的工具从 Claude 下面切出来（Claude 宽度不变，只是变矮；轨迹一直露在旁边能点），占 Claude 那一格高度的比例
     "tool_height": 0.5,
+    # 底部在自己的按钮后面（│ 隔开）自动列出装了的其他 herdr 插件，每个插件一个按钮、绑它的第一个 action；放不下的收进 ⋯。
+    # 打开轨迹时读一次，点 ⟳ 时再读一次，不轮询。[plugins."<插件 id>"] 里可以 hidden = true 藏掉、action = "…" 换绑、
+    # icon = "…" 换图标、label = "…" 换名字
+    "plugin_buttons": True,
+    "plugins": {},
 }
 
 
@@ -82,6 +87,7 @@ def config():
     except (ImportError, OSError, ValueError):
         user = {}
     cfg = {**DEFAULTS, **{k: v for k, v in user.items() if k in DEFAULTS}}
+    cfg["plugins"] = {k: v for k, v in cfg["plugins"].items() if isinstance(v, dict)} if isinstance(cfg["plugins"], dict) else {}
     cfg["buttons"] = [b for b in cfg["buttons"] if isinstance(b, dict) and b.get("label")
                       and (b.get("command") or re.fullmatch(r"[\w.:-]+\.[\w:-]+", str(b.get("action") or "")))]
     try:
@@ -244,6 +250,7 @@ ICONS = {
     "git":     ("", "±",     ""),         # 文字档不另加图标，按钮本身就有字
     "files":   ("", "▤",     ""),
     "close":   ("", "✕",     "x"),        # 关掉开着的工具（底部高亮按钮旁边）
+    "more":    ("", "⋯",     "..."),      # 底部放不下的插件按钮都在这里
     "shell":   ("", "›_",    ""),         # 命令行按钮
 }
 _TIER = ("nerd", "unicode", "text").index(CFG["icons"])
@@ -283,6 +290,56 @@ def wide_buttons():
 
 def footer_buttons():
     return [(t, a, 0) for t, a in tool_buttons()]
+
+
+# 插件的第一个 action 默认绑什么：有的插件第一个 action 是 overlay，herdr 0.9.5 的 overlay 会盖满整个标签页、
+# 连轨迹一起盖住（2026-10-25 实测），这种改绑它自己的别的开法。zoetrope 选 open-tab 不选 open-split：
+# split 开在 Claude 旁边，把 Claude 从 83 列挤到 42 列；tab 开一个新标签页，原来那一页一点不动（实测）
+PLUGIN_DEFAULT_ACTION = {"furkankly.zoetrope": "open-tab"}
+
+
+def load_plugins():
+    """装了、开着的其他 herdr 插件：[{id, label, icon, action, actions: [(action_id, 标题)]}]，按 herdr 列出来的顺序。
+    每个插件绑它 manifest 里第一个能在这台机器上、对着窗格用的 action（plugin.action.list 是按字母排的，所以顺序看
+    manifest）；配置 [plugins."<id>"] 可以藏、换绑、换图标、换名字。"""
+    if not CFG["plugin_buttons"]:
+        return []
+    try:
+        r = call("plugin.list")
+        plugs = r.get("plugins", []) if isinstance(r, dict) else r
+        r = call("plugin.action.list")
+        acts = r.get("actions", []) if isinstance(r, dict) else r
+    except (OSError, ValueError, HerdrError):
+        return []
+    plat = "macos" if sys.platform == "darwin" else "windows" if sys.platform.startswith("win") else "linux"
+    out = []
+    for p in plugs:
+        pid = p.get("plugin_id")
+        mine = CFG["plugins"].get(pid) or {}
+        if not pid or pid == PLUGIN_ID or not p.get("enabled", True) or mine.get("hidden"):
+            continue
+        avail = [a for a in acts if a.get("plugin_id") == pid and a.get("action_id")
+                 and (not a.get("platforms") or plat in a["platforms"])
+                 and (not a.get("contexts") or "pane" in a["contexts"])]
+        try:
+            import tomllib
+            with open(p.get("manifest_path") or "", "rb") as f:
+                order = [a.get("id") for a in tomllib.load(f).get("actions", [])]
+        except (ImportError, OSError, ValueError):
+            order = []
+        avail.sort(key=lambda a: order.index(a["action_id"]) if a["action_id"] in order else len(order))
+        ids = [a["action_id"] for a in avail]
+        if not ids:
+            continue
+        action = next((x for x in (mine.get("action"), PLUGIN_DEFAULT_ACTION.get(pid)) if x in ids), ids[0])
+        label = str(mine.get("label") or re.sub(r"^herdr-", "", (p.get("name") or pid).split(".")[-1]))
+        out.append({"id": pid, "label": label, "icon": "" if CFG["icons"] == "text" else str(mine.get("icon") or ""),
+                    "action": action, "actions": [(a["action_id"], a.get("title") or a["action_id"]) for a in avail]})
+    return out
+
+
+def cells_w(cells):
+    return sum(_cell_w(t) + e for t, _a, e, *_ in cells) + GAP * max(0, len(cells) - 1)
 
 
 def _cell_w(text):
@@ -421,6 +478,7 @@ class Sidebar:
         base = RUN / me.replace(":", "_")
         self.reg, self.fifo = base.with_suffix(".json"), base.with_suffix(".fifo")
         self.sock, self.rows_file = base.with_suffix(".sock"), base.with_suffix(".rows")
+        self.menu_file = base.with_suffix(".menu")
         self.sid = self.path = self.tr = None
         self.cfg_dir, self.status = claude.DEFAULT_CFG, None
         self.opened, self.expanded = None, False
@@ -442,6 +500,8 @@ class Sidebar:
         self.tool = None                      # (工具窗格, 第几个按钮)：开着的 lazygit / yazi 之类
         self.tool_check = None                # 焦点离开工具窗格的时刻：0.4 秒后还不在它身上就关
         self.tool_sticky = False              # 这个工具不跟着「点外面就关」（命令行）
+        self.plugins = []                     # 装了的其他 herdr 插件（load_plugins），打开时和点 ⟳ 时读
+        self.foot_rows = []                   # 底部每一行的按钮，画和点都按它
         self.code, self.code_new = code_sig(), None   # 启动时的代码 / 刚看到、还要再确认一次的新代码
         self.reload_at = time.monotonic() + RELOAD_EVERY
         self.restart = None                   # 要换成的新插件目录：主循环退出后 cmd_pane 原地 exec 过去
@@ -613,10 +673,34 @@ class Sidebar:
         return "\n".join(lines)
 
     def footer(self, width):
-        """底部一行：配置里的自定义按钮，▼ 挂在右端（没配按钮就只有 ▼）。"""
-        cells = self.footer_cells()
-        line, self.down_at = hang(buttons_line(cells) if cells else "", self.page_tag(1), max(4, width - 2))
-        return line or " "
+        """底部：自己的按钮，后面（│ 隔开）是其他 herdr 插件的按钮，放不下的收进 ⋯；▼ 挂在第一行右端。
+        窄版第一行放不下插件，插件单独放第二行、只写名字的首字母。画和点都按 self.foot_rows 算。"""
+        room = max(4, width - 2)
+        tag = self.page_tag(1)
+        tools = self.footer_cells()
+        plug = [(p["icon"] or (p["label"] if self.mode != "narrow" else p["label"][:1].upper()), f"plug:{i}", 0)
+                for i, p in enumerate(self.plugins)]
+        if self.mode == "narrow":
+            rows = [tools, self.fit_plugins([], plug, room)] if plug else [tools]
+        else:
+            first = room - (R.cols(tag) + 1 if tag else 0)
+            rows = [self.fit_plugins(tools + ([("│", None, 0)] if tools else []), plug, first) if plug else tools]
+        self.foot_rows = rows
+        lines = [buttons_line(r) if r else "" for r in rows]
+        lines[0], self.down_at = hang(lines[0], tag, room)
+        return "\n".join(ln or " " for ln in lines)
+
+    def fit_plugins(self, head, plug, room):
+        """head 后面接插件按钮，放不下的收进 ⋯（点了弹出所有插件的所有 action）。"""
+        more = (icon("more"), "plugmenu", 0)
+        if cells_w(head + plug) <= room:
+            return head + plug
+        keep = list(head)
+        for c in plug:
+            if cells_w(keep + [c, more]) > room:
+                break
+            keep.append(c)
+        return keep + [more]
 
     def footer_cells(self):
         """底部的按钮，画和点都按这一份算。开着工具时它的按钮反色，紧跟一个 ✕（点了关掉）；窄版放不下多一格，
@@ -747,6 +831,10 @@ class Sidebar:
             self.push()
             self.jump_token += 1
             threading.Thread(target=self.jump, args=(sid, self.jump_token), daemon=True).start()
+        elif parts[0] == "plugrun" and len(parts) > 2:   # ⋯ 的 popup 里选中了一条
+            self.later(0.2)                                 # popup 先关掉
+            time.sleep(0.2)
+            self.run_plugin(parts[1], parts[2])
         elif parts[0] == "view":              # fzf 的列表滚过 / 刷新过 / 换了大小：更新「▲ 更早」「▼ 更新」的数字
             self.watch_view()
         elif parts[0] == "click" and len(parts) > 2:          # 表头
@@ -770,11 +858,12 @@ class Sidebar:
             act = button_at(wide_buttons(), int(col)) if ln == "1" else None
             if act:
                 self.act(act)
-        elif parts[0] == "foot" and len(parts) > 2 and parts[1] == "1" and parts[2].isdigit():   # 底部：自定义按钮，右端是 ▼
-            if self.down_at and int(parts[2]) >= self.down_at - 1:
+        elif parts[0] == "foot" and len(parts) > 2 and parts[1].isdigit() and parts[2].isdigit():   # 底部，第 1 行右端是 ▼
+            ln, col = int(parts[1]), int(parts[2])
+            if ln == 1 and self.down_at and col >= self.down_at - 1:
                 self.page(1)
                 return
-            act = button_at(self.footer_cells(), int(parts[2]))
+            act = button_at(self.foot_rows[ln - 1], col) if 0 < ln <= len(self.foot_rows) else None
             if act:
                 self.act(act)
         elif parts[0] == "toggle":            # 插件动作（快捷键）：拉到窄版 / 拉回宽版
@@ -784,6 +873,13 @@ class Sidebar:
         """宽版、窄版的按钮共用。"""
         if act == "usage":
             self.kick_usage(force=True)
+            self.plugins = load_plugins()     # 刚装 / 刚卸的插件，点一下 ⟳ 底部就跟上
+            self.push()
+        elif act.startswith("plug:"):
+            p = self.plugins[int(act[5:])]
+            self.run_plugin(p["id"], p["action"])
+        elif act == "plugmenu":
+            self.plugin_menu()
         elif act == "bottom":
             self.jump_token += 1
             HerdrTerm(self.target).send("C-End")
@@ -852,6 +948,32 @@ class Sidebar:
             self.tool_sticky = button.get("close_on_blur", True) is False
         except (OSError, ValueError, KeyError, HerdrError) as e:
             self.say(f"{prog}: {e}")
+
+    # -- 其他 herdr 插件 --
+
+    def run_plugin(self, plugin, action):
+        """调别的插件的 action：先把焦点交回 Claude（点轨迹时焦点到了轨迹上，对方插件按焦点干活）。"""
+        try:
+            call("pane.focus", pane_id=self.target)
+            call("plugin.action.invoke", plugin_id=plugin, action_id=action,
+                 context={"focused_pane_id": self.target, "invocation_source": PLUGIN_ID})
+        except (OSError, ValueError, HerdrError) as e:
+            self.say(f"{plugin}: {e}")
+
+    def plugin_menu(self):
+        """⋯：用 herdr 的 popup 列出所有插件的所有 action（trail.py menu），选中的那一条经 FIFO 送回来再调。
+        popup 开着时整个会话只认它，所以不在 popup 里直接调：等它关了，这边再调。"""
+        rows = [f"{p['id']}\t{a}\t{p['label']}  {t}" for p in self.plugins for a, t in p["actions"]]
+        if not rows:
+            return
+        self.menu_file.write_text("\n".join(rows) + "\n")
+        try:
+            call("plugin.pane.open", plugin_id=PLUGIN_ID, entrypoint="menu", placement="popup", focus=True,
+                 width=min(100, max(40, max(R.cols(r) for r in rows) - 20)), height=min(len(rows) + 4, 30),
+                 env={"STATETRAIL_MENU": str(self.menu_file), "STATETRAIL_FIFO": str(self.fifo),
+                      "PATH": os.environ.get("PATH", "")})
+        except (OSError, ValueError, HerdrError) as e:
+            self.say(f"⋯: {e}")
 
     def code_changed(self):
         """插件代码换了（连着两次看到同一份新代码，免得装到一半就换），而且新代码能编译：返回新目录。"""
@@ -1062,6 +1184,7 @@ class Sidebar:
         self.refresh()
         self.kick_usage()
         self.mode = self.mode_for(self.width())
+        self.plugins = load_plugins()
         self.start_fzf()
         buf = b""
         try:
@@ -1155,7 +1278,7 @@ class Sidebar:
             self.close_tool(focus=False)
             # 原地重启时登记留着：换代码那零点几秒里，别让自动打开以为这里没有轨迹、再开一个
             for p in ((self.reg,) if not self.restart else ()) + (self.fifo, self.sock, self.rows_file,
-                                                                   self.rows_file.with_suffix(".tmp")):
+                                                                   self.rows_file.with_suffix(".tmp"), self.menu_file):
                 p.unlink(missing_ok=True)
             self.stop_fzf()
             sub.close()
@@ -1337,7 +1460,22 @@ def locked():
     return lock()
 
 
-COMMANDS = {"toggle": cmd_toggle, "pane": cmd_pane, "auto": cmd_auto}
+def cmd_menu():
+    """⋯ 的 popup 里跑的：列出所有插件的所有 action，点一下或回车就选它（写回轨迹的 FIFO，由轨迹去调），Esc 不选。"""
+    menu, fifo = os.environ.get("STATETRAIL_MENU"), os.environ.get("STATETRAIL_FIFO")
+    if not menu or not fifo:
+        sys.exit("trail.py menu: STATETRAIL_MENU / STATETRAIL_FIFO not set")
+    with open(menu, "rb") as stdin:
+        r = subprocess.run(["fzf", "--no-sort", "--layout=reverse", "--delimiter=\t", "--with-nth=3", "--info=hidden",
+                            "--pointer=▌", "--header", _t("点一下就运行，Esc 不选"), "--bind", "left-click:accept",
+                            f"--color={FZF_COLORS}"], stdin=stdin, stdout=subprocess.PIPE, text=True)
+    pick = r.stdout.strip().split("\t")
+    if r.returncode == 0 and len(pick) >= 2:
+        with open(fifo, "w") as f:
+            f.write(f"plugrun {pick[0]} {pick[1]}\n")
+
+
+COMMANDS = {"toggle": cmd_toggle, "pane": cmd_pane, "auto": cmd_auto, "menu": cmd_menu}
 
 if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
