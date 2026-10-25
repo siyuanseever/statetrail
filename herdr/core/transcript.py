@@ -13,8 +13,13 @@ agent 写的文字。reply 只留最后一段文字的第一行，够侧栏显�
 Transcript），两边对同一份对话记录切出来的轮次一致。
 """
 import json
+import os
 import re
+import subprocess
+import sys
+from pathlib import Path
 
+from . import i18n
 from .i18n import t as _t
 
 # Plain-string user entries that are harness noise, not something that makes Claude reply.
@@ -22,6 +27,7 @@ NOISE_PREFIXES = ("<local-command", "<command-name>", "<command-message>",
                   "This session is being continued from a previous conversation")
 SLASH_CMD = re.compile(r"^/[\w:-]+(\s|$)")
 PROMPT_MAX = 4000        # 展开时最多显示你那句话的多少个字
+CHILD_OVER = 8 * 1024 * 1024   # 一次要读这么多以上（打开轨迹、原地重启时的第一次）就交给子进程解析
 
 
 def text_of(content):
@@ -76,6 +82,7 @@ class ClaudeTranscript:
     def __init__(self, path):
         self.path, self.pos, self.size = path, 0, -1
         self.stops, self.title, self.cur = [], None, None
+        self.compacts = 0                         # 见过几个压缩边界（子进程把它交回来）
 
     def update(self):
         try:
@@ -86,6 +93,8 @@ class ClaudeTranscript:
             return False
         if size < self.pos:                       # 被截断/重写了：从头来
             self.__init__(self.path)
+        if size - self.pos > CHILD_OVER and not os.environ.get("STATETRAIL_IN_CHILD") and self.in_child(size):
+            return True
         # 一行一行地读、读一行解析一行，不把整个文件读进内存：几百 MB 的对话记录一次读进来再解码、切行，
         # 峰值要好几 GB，Python 用过的内存又很少还给系统（实测 737 MB 的记录峰值 2.8 GB、读完还占 770 MB）
         start = self.pos
@@ -102,6 +111,40 @@ class ClaudeTranscript:
         self.size = size
         return self.pos > start
 
+    def in_child(self, size):
+        """大块的第一次读放进一个临时子进程：逐行解析时 CPython 用过的内存池还不回系统（几百 MB 的对话记录，真正
+        留下的摘要不到 1 MB，进程却停在 55～62 MB），子进程退出就全还了。子进程只把每轮的摘要交回来。失败就返回
+        False，照常在本进程里读。"""
+        env = dict(os.environ, STATETRAIL_IN_CHILD="1", STATETRAIL_LANG=i18n.LANG)   # 「后台任务完成」这类字要同一种语言
+        code = ("import sys, json; sys.path.insert(0, sys.argv[1]); from pathlib import Path\n"
+                "from core.transcript import ClaudeTranscript\n"
+                "t = ClaudeTranscript(Path(sys.argv[2])); t.pos = int(sys.argv[3])\n"
+                "cur = json.load(sys.stdin)\n"
+                "if cur: t.stops, t.cur = [cur], cur\n"     # 接着填前面那一轮：它的回复可能写在这一段开头
+                "t.update()\n"
+                "json.dump({'pos': t.pos, 'size': t.size, 'title': t.title, 'stops': t.stops,"
+                " 'compacts': t.compacts}, sys.stdout)")
+        try:
+            r = subprocess.run([sys.executable, "-c", code, str(Path(__file__).resolve().parent.parent),
+                                str(self.path), str(self.pos)], env=env, capture_output=True, text=True, timeout=600,
+                               input=json.dumps(self.cur))
+            got = json.loads(r.stdout) if r.returncode == 0 else None
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            got = None
+        if not got:
+            return False
+        if self.cur is not None:                  # 子进程交回来的第一轮就是接着填完的那一轮，换掉这边的
+            self.stops.pop()
+        if got["compacts"]:                       # 子进程那一段里有压缩边界：这边已有的轮次也都在它之前
+            for st in self.stops:
+                st["compacted"] = True
+        self.stops += got["stops"]
+        self.title = got["title"] or self.title
+        self.compacts += got["compacts"]
+        self.cur = self.stops[-1] if self.stops else None    # cur 总是最后追加的那一轮
+        self.pos, self.size = got["pos"], got["size"]
+        return True
+
     def feed(self, e):
         t = e.get("type")
         if t == "ai-title":
@@ -111,6 +154,7 @@ class ClaudeTranscript:
             # Claude's screen restarts here: earlier turns are no longer shown in it.
             for st in self.stops:
                 st["compacted"] = True
+            self.compacts += 1
             return
         trig = _trigger(e)
         if trig:
