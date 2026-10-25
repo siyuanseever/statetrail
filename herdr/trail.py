@@ -137,7 +137,8 @@ FRAME = 2                          # herdr 给窗格画的边框：tty 比 pane.
 # （code.claude.com/docs/en/interactive-mode.md「Diff panel」）。放不下宽版就用窄版
 CLAUDE_MIN = 110
 RELOAD_EVERY = 5                   # 多久看一次插件代码换没换（herdr plugin update 装到了新目录，或者本地改了文件）
-GONE_GRACE = 15                    # Claude 退出后等多少秒才关轨迹：切账号时 Claude 会退出再重启
+GONE_GRACE = 2                     # Claude 退出后过这么久就关掉轨迹，不留残骸（用户 2026-10-25 要的；以前是 15 秒，
+                                   # 照 tmux 版给切账号留的。Claude 在这一格里重新起来，自动打开会再开一个）
 LATER = (0.5, 1.5)                 # Claude 状态变了之后再补刷几次：Stop 时最后那条回复还没写进对话记录
 VERSION = re.compile(r"^\d+\.\d+\.\d+$")   # Claude Code 的进程名是版本号
 
@@ -1354,6 +1355,8 @@ class Sidebar:
                     self.restart = self.code_changed()
                     if self.restart:
                         break                                 # 插件更新了：收掉 fzf，原地换成新代码（cmd_pane）
+                    if self.no_claude_since is None and not reader_for((pane_info(self.target) or {}).get("agent")):
+                        stale = True                          # Claude 退出了却没等到状态事件：这里补一刀，别让轨迹一直留着
                     if self.plugins_changed():                # 装了 / 卸了别的 herdr 插件：底部的插件按钮跟上
                         self.plugins = load_plugins()
                         stale = True
