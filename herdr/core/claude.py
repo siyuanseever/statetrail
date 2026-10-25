@@ -382,6 +382,7 @@ def refresh_usage(cfg_dir, force=False):
         live["attempted_at_ms"] = now_ms
         _save(path, live)                       # 先记下「在查」：表头显示「查询中…」
         usage, err = _fetch(cfg_dir)
+        _log_fetch(cfg_dir, err)
         if usage:
             live.update(usage)
             live["fetched_at_ms"] = int(time.time() * 1000)
@@ -390,6 +391,20 @@ def refresh_usage(cfg_dir, force=False):
             live["error"] = err
             live["error_at_ms"] = int(time.time() * 1000)
         _save(path, live)
+
+
+FETCH_LOG = "fetch.log"   # 每真发出一次额度查询记一行（时间、账号目录、结果），发版前的资源检查数它
+
+
+def _log_fetch(cfg_dir, err):
+    try:
+        log = USAGE_DIR / FETCH_LOG
+        if log.exists() and log.stat().st_size > 100_000:
+            log.write_text("")
+        with open(log, "a") as f:
+            f.write(f"{int(time.time())}\t{cfg_dir}\t{err or 'ok'}\n")
+    except OSError:
+        pass
 
 
 def usage_stale(cfg_dir):
