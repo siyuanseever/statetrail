@@ -30,9 +30,8 @@ statetrail is for the session you are in: it stays beside the live Claude and fo
   the Claude session's name. Claude's running / waiting state is not repeated: herdr's agent list already shows it.
 - **Your buttons.** A row at the bottom for your own tools — by default Git (lazygit), Files (yazi) and a shell. A tool
   opens below Claude, in Claude's working directory: Claude keeps its width and only gets shorter, and the trail stays
-  usable beside it. While a tool is open its button is highlighted with a `✕` next to it (in the narrow view the
-  button itself becomes the `✕`). To close it: click its button again, click `✕`, quit the tool (`q` in lazygit and
-  yazi, `Esc` in lazygit too, `exit` in the shell), or, for Git and Files, click anywhere outside it. Claude gets its
+  usable beside it. The bottom row stays as it is. To close a tool: click its button again, quit the tool (`q` in
+  lazygit and yazi, `Esc` in lazygit too, `exit` in the shell), or, for Git and Files, click anywhere outside it. Claude gets its
   height back and the focus. Clicking another button swaps the tool, so only one is open at a time. The third default
   button, `›_`, is a shell for the commands Claude can't run for you (`sudo` asking for a password,
   `gcloud auth login` in a browser, an interactive `ssh`): it starts in Claude's directory and stays open when you

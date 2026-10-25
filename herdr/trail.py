@@ -249,7 +249,6 @@ ICONS = {
     "7d":      ("", "▦",     "7d"),
     "git":     ("", "±",     ""),         # 文字档不另加图标，按钮本身就有字
     "files":   ("", "▤",     ""),
-    "close":   ("", "✕",     "x"),        # 关掉开着的工具（底部高亮按钮旁边）
     "more":    ("", "⋯",     "..."),      # 底部放不下的插件按钮都在这里
     "shell":   ("", "›_",    ""),         # 命令行按钮
 }
@@ -339,7 +338,7 @@ def load_plugins():
 
 
 def cells_w(cells):
-    return sum(_cell_w(t) + e for t, _a, e, *_ in cells) + GAP * max(0, len(cells) - 1)
+    return sum(_cell_w(t) + e for t, _a, e in cells) + GAP * max(0, len(cells) - 1)
 
 
 def _cell_w(text):
@@ -348,20 +347,18 @@ def _cell_w(text):
 
 
 def buttons_line(buttons, u=None):
-    """buttons：(文字, 动作, 额外宽度[, 高亮])。高亮 = 整格反色（开着的工具）。"""
     cells = []
-    for text, act, extra, *lit in buttons:
+    for text, act, extra in buttons:
         w = _cell_w(text)
         pad = (w - R.cols(text)) // 2
-        cell = " " * pad + text + " " * (w - R.cols(text) - pad)
-        cells.append((f"{R.REVERSE}{cell}{R.NO_REVERSE}" if lit and lit[0] else cell)
+        cells.append(" " * pad + text + " " * (w - R.cols(text) - pad)
                      + R.fit(R.usage_state(u, time.time()) if act == "usage" else "", extra))
     return (" " * GAP).join(cells)
 
 
 def button_at(buttons, col):
     x = 1
-    for text, act, extra, *_ in buttons:
+    for text, act, extra in buttons:
         w = _cell_w(text) + extra
         if x <= col < x + w:
             return act
@@ -677,7 +674,8 @@ class Sidebar:
         窄版第一行放不下插件，插件单独放第二行、只写名字的首字母。画和点都按 self.foot_rows 算。"""
         room = max(4, width - 2)
         tag = self.page_tag(1)
-        tools = self.footer_cells()
+        # 工具开着时底部不变：不高亮、不加关闭按钮，再点一次同一个按钮就关（用户定的）
+        tools = footer_buttons()
         plug = [(p["icon"] or (p["label"] if self.mode != "narrow" else p["label"][:1].upper()), f"plug:{i}", 0)
                 for i, p in enumerate(self.plugins)]
         if self.mode == "narrow":
@@ -701,20 +699,6 @@ class Sidebar:
                 break
             keep.append(c)
         return keep + [more]
-
-    def footer_cells(self):
-        """底部的按钮，画和点都按这一份算。开着工具时它的按钮反色，紧跟一个 ✕（点了关掉）；窄版放不下多一格，
-        就把那个按钮本身画成 ✕——点它本来就是关（再点一次同一个按钮 = 关）。"""
-        open_act = f"tool:{self.tool[1]}" if self.tool else None
-        out = []
-        for text, act, extra in footer_buttons():
-            if act != open_act:
-                out.append((text, act, extra))
-            elif self.mode == "narrow":
-                out.append((icon("close"), "close_tool", extra, True))
-            else:
-                out += [(text, act, extra, True), (icon("close"), "close_tool", 0)]
-        return out
 
     def page_tag(self, d):
         """列表上面还有几轮（▲ 73）、下面还有几轮（▼ 5），点一下翻一页；窄版写成「▲73」「▼5」。
@@ -888,10 +872,6 @@ class Sidebar:
             self.set_mode(act)
         elif act.startswith("tool:"):
             self.run_tool(CFG["buttons"][int(act[5:])])
-            self.push()                       # 底部的高亮 / ✕ 跟上
-        elif act == "close_tool":
-            self.close_tool()
-            self.push()
 
     def run_tool(self, button):
         """配置里的按钮。command：在 Claude 那一格的目录里开本插件的浮窗（manifest 的 tool 窗格），经 sh -c 跑它；
@@ -1226,7 +1206,6 @@ class Sidebar:
                             gone = True
                         if self.tool and name in ("pane_closed", "pane_exited") and data.get("pane_id") == self.tool[0]:
                             self.tool, self.tool_check = None, None   # 在工具里按 q / Esc / exit 退出了，窗格自己关了
-                            stale = True                              # 底部的高亮 / ✕ 跟着收掉
                             try:                                      # herdr 会把焦点给隔壁（轨迹），还给 Claude
                                 call("pane.focus", pane_id=self.target)
                             except (OSError, ValueError, HerdrError):
@@ -1254,7 +1233,6 @@ class Sidebar:
                                     if p.get("focused") and p.get("tab_id") == (pane_info(self.target) or {}).get("tab_id")), None)
                     if self.tool and focused != self.tool[0]:
                         self.close_tool()
-                        stale = True                          # 底部的高亮 / ✕ 跟着收掉
                 if self.reload_at <= time.monotonic():
                     self.reload_at = time.monotonic() + RELOAD_EVERY
                     self.restart = self.code_changed()
