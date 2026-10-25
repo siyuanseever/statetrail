@@ -365,7 +365,10 @@ class Sidebar:
         self.cfg_dir, self.status = claude.DEFAULT_CFG, None
         self.opened, self.expanded = None, False
         self.missing = set()
-        self.pushed = (None, None)            # 上次推给 fzf 的 (列表, 表头)
+        self.pushed = (None, None, None)      # 上次推给 fzf 的 (列表, 表头, 底部)
+        self.view = (0, 0, 0)                 # 列表现在露出来的范围：(上面还有几轮, 下面还有几轮, 露出来几项)
+        self.view_at = []                     # 什么时候去读一下自己的屏幕，更新 view
+        self.up_ln = None                     # 「▲ 更早 N 轮」是表头的第几行（点表头时按行号认）
         self.flash = None                     # (一句提示, 到什么时候为止)
         self.mc = (None, ("", ""))            # (对话记录大小, model_ctx)：没变就不重读尾巴
         self.due = []                         # 预约的补刷时间
@@ -398,6 +401,7 @@ class Sidebar:
         if sid != self.sid:                   # /clear、/resume 换了会话
             self.sid, self.path, self.tr = sid, None, None
             self.opened, self.expanded, self.mc = None, False, (None, ("", ""))
+            self.view = (0, 0, 0)
             self.missing = set()
             if sid:
                 self.cfg_dir = claude.config_dir_of_pid(claude_pid(self.target))
@@ -517,6 +521,8 @@ class Sidebar:
         for prio in (1, 2, 3):
             fields = [(p, ln) for p, ln in fields if p != prio or R.cols(ln) <= room]
         lines += [ln for _, ln in fields]
+        lines.append(self.page_line(-1))
+        self.up_ln = len(lines)
         return "\n".join(R.clip(ln, room) for ln in lines)
 
     def wide_header(self, width):
@@ -533,7 +539,25 @@ class Sidebar:
         model, ctx = self.model_ctx()
         lines = R.status_lines(width, model, ctx, u, claude.current_account(self.cfg_dir),
                                claude.auto_compact_at(), claude.CTX_HARD)
-        return "\n".join([buttons_line(wide_buttons(), u), head, *lines])
+        lines = [buttons_line(wide_buttons(), u), head, *lines, self.page_line(-1)]
+        self.up_ln = len(lines)
+        return "\n".join(lines)
+
+    def footer(self):
+        """底部：第 1 行「▼ 更新 N 轮」，下面是配置里的自定义按钮（没配就只有这一行）。"""
+        return "\n".join([self.page_line(1), *([buttons_line(footer_buttons())] if footer_buttons() else [])])
+
+    def page_line(self, d):
+        """列表上面一行「▲ 更早 12 轮」、下面一行「▼ 更新 5 轮」，点一下翻一页；窄版写成「▲12」「▼5」。
+        那一边已经到头就留一个空行，不收掉：收掉的话表头 / 底部少一行，列表会跟着上下跳。"""
+        n = self.view[0] if d < 0 else self.view[1]
+        if not n:
+            return " "
+        arrow = "▲" if d < 0 else "▼"
+        if self.mode == "narrow":
+            return f"{R.GREY}{arrow}{n}{R.RESET}"
+        text = _t("更早 {n} 轮") if d < 0 else _t("更新 {n} 轮")
+        return f"{R.GREY}{arrow} {text.format(n=n)}{R.RESET}"
 
     def rows(self, width):
         if not self.tr:
@@ -545,19 +569,77 @@ class Sidebar:
 
     def push(self):
         width = self.width()
-        rows, header = self.rows(width), self.header(width)
-        last_rows, last_header = self.pushed
-        # 表头和列表分两次发（tmux 版踩过：写在同一条里 fzf 会把后面的 change-header 吞掉）
+        rows, header, footer = self.rows(width), self.header(width), self.footer()
+        last_rows, last_header, last_footer = self.pushed
+        # 表头、底部、列表分开发（tmux 版踩过：写在同一条里 fzf 会把后面的 change-header 吞掉）
         if header != last_header and not fzf(self.sock, "change-header:" + header):
+            return
+        if footer != last_footer and not fzf(self.sock, "change-footer:" + footer):
+            self.pushed = (last_rows, header, None)
             return
         if rows != last_rows:
             tmp = self.rows_file.with_suffix(".tmp")
             tmp.write_text(rows)
             tmp.replace(self.rows_file)
             if not fzf(self.sock, f"reload-sync(cat {_q(self.rows_file)})"):
-                self.pushed = (None, header)
+                self.pushed = (None, header, footer)
                 return
-        self.pushed = (rows, header)
+        self.pushed = (rows, header, footer)
+
+    # -- 翻页 --
+
+    # 一轮的第一行：fzf 左边 2 列（指针 + 标记），宽版先是一列亮边（┃ 或空格），然后是轮号和一个空格。
+    # 回复那一行、展开的你说的话都是「空格 + 亮边 + 空格」开头，「已压缩」那一行是「1–12」「第 1–12 轮」，都认不成轮号。
+    TURN_LINE = re.compile(r"^..[┃ ]?(\d+)(?= |$)")
+
+    def read_view(self):
+        """读轨迹自己这一格的屏幕，看列表现在露出来的是第几轮到第几轮（fzf 不报列表滚到哪了，--listen 的 GET 里没有）。
+        列表在表头、底部的两条分隔线之间；最上面那一项总是从第一行露起，认不成轮号的就是「已压缩」那一行。"""
+        try:
+            lines = call("pane.read", pane_id=self.me, source="visible")["read"]["text"].split("\n")
+        except (OSError, ValueError, KeyError, HerdrError):
+            return None
+        rules = [i for i, ln in enumerate(lines) if len(ln) >= 2 and set(ln.rstrip()) == {"─"}]
+        stops = self.stops()
+        if len(rules) < 2 or not stops:
+            return None
+        body = [ln for ln in lines[rules[0] + 1:rules[-1]] if ln.strip()]
+        nums = [int(m.group(1)) for ln in body if (m := self.TURN_LINE.match(ln))]
+        fold = bool(body) and not self.TURN_LINE.match(body[0]) and any(st["compacted"] for st in stops)
+        if not nums:
+            return None if not fold else (0, len(stops) - sum(1 for st in stops if st["compacted"]), 1)
+        return (0 if fold else nums[0] - 1, len(stops) - nums[-1], len(nums) + fold)
+
+    def update_view(self):
+        view = self.read_view()
+        if view is None or view == self.view:
+            return False
+        self.view = view
+        return True
+
+    def watch_view(self):
+        """列表滚过、换了内容、窗格变了大小：等 fzf 画完再读屏幕，过一会儿再读一次（画得慢的时候兜底）。"""
+        now = time.monotonic()
+        self.view_at = [now + 0.05, now + 0.3]
+
+    def page(self, d):
+        """点「▲ 更早」「▼ 更新」：翻一屏的轮数。少翻一项，留一轮重叠：边上那一轮常常只露出半截，整屏翻过去就看不到它了。"""
+        before = self.read_view() or self.view
+        step = max(1, before[2] - 1)
+        side = 0 if d < 0 else 1
+        want = max(0, before[side] - step)     # 翻完以后这一边还剩几轮
+        act, left = ("offset-up" if d < 0 else "offset-down"), step
+        # 翻完读一下屏幕，没翻够就补：光标停在最后一项时，fzf 的第一下 offset-up 不动（实测 fzf 0.74）
+        for _ in range(3):
+            fzf(self.sock, "+".join([act] * left))
+            time.sleep(0.06)
+            now = self.read_view()
+            if now is None:
+                break
+            left = now[side] - want
+            if left <= 0:
+                break
+        self.watch_view()
 
     def say(self, msg, secs=6):
         """跳转线程里也会叫：只记下来、叫醒主循环，推送都在主线程里做。"""
@@ -583,9 +665,14 @@ class Sidebar:
             self.push()
             self.jump_token += 1
             threading.Thread(target=self.jump, args=(sid, self.jump_token), daemon=True).start()
+        elif parts[0] == "view":              # fzf 的列表滚过 / 刷新过 / 换了大小：更新「▲ 更早」「▼ 更新」的数字
+            self.watch_view()
         elif parts[0] == "click" and len(parts) > 2:          # 表头
             ln, col = parts[1], parts[2]
             if not (ln.isdigit() and col.isdigit()):
+                return
+            if int(ln) == self.up_ln:          # 表头最后一行「▲ 更早 N 轮」
+                self.page(-1)
                 return
             if self.mode == "narrow":
                 if ln == "1":
@@ -599,7 +686,9 @@ class Sidebar:
             act = button_at(wide_buttons(), int(col)) if ln == "1" else None
             if act:
                 self.act(act)
-        elif parts[0] == "foot" and len(parts) > 2 and parts[2].isdigit():   # 底部的自定义按钮
+        elif parts[0] == "foot" and len(parts) > 2 and parts[1] == "1":     # 底部第 1 行「▼ 更新 N 轮」
+            self.page(1)
+        elif parts[0] == "foot" and len(parts) > 2 and parts[1] == "2" and parts[2].isdigit():   # 第 2 行：自定义按钮
             act = button_at(footer_buttons(), int(parts[2]))
             if act:
                 self.act(act)
@@ -739,14 +828,11 @@ class Sidebar:
             raise HerdrError(ack["error"].get("code"), ack["error"].get("message"))
         return s, buf
 
-    def fzf_cmd(self, header):
+    def fzf_cmd(self, header, footer):
         fifo = _q(self.fifo)
         narrow = self.mode == "narrow"
         extra = [] if narrow else ["--gap"]   # 窄版：每轮一行，不要项与项之间的空行
-        if footer_buttons():                  # 自定义按钮固定在底部，分隔线和上面隔开
-            extra += ["--footer", buttons_line(footer_buttons()), "--footer-border=top",
-                      "--bind", ("click-footer:execute-silent(printf 'foot %s %s\\n' \"$FZF_CLICK_FOOTER_LINE\" "
-                                 f"\"$FZF_CLICK_FOOTER_COLUMN\" >> {fifo})")]
+        view = f"execute-silent(printf 'view\\n' >> {fifo})"
         return [
             "fzf", "--read0", "--ansi", "--no-input", "--no-sort", "--layout=reverse", "--sync",
             "--track", "--id-nth=1", "--delimiter=\t", "--with-nth=2..",
@@ -759,7 +845,14 @@ class Sidebar:
             "--bind", f"left-click:execute-silent(printf 'open %s\\n' {{1}} >> {fifo})",
             "--bind", ("click-header:execute-silent(printf 'click %s %s\\n' \"$FZF_CLICK_HEADER_LINE\" "
                        f"\"$FZF_CLICK_HEADER_COLUMN\" >> {fifo})"),
-            "--bind", "scroll-up:offset-up+offset-up+offset-up,scroll-down:offset-down+offset-down+offset-down",
+            # 底部：「▼ 更新 N 轮」和自定义按钮，分隔线和上面隔开
+            "--footer", footer, "--footer-border=top",
+            "--bind", ("click-footer:execute-silent(printf 'foot %s %s\\n' \"$FZF_CLICK_FOOTER_LINE\" "
+                       f"\"$FZF_CLICK_FOOTER_COLUMN\" >> {fifo})"),
+            "--bind", (f"scroll-up:offset-up+offset-up+offset-up+{view},"
+                       f"scroll-down:offset-down+offset-down+offset-down+{view}"),
+            # 列表露出来的范围可能变了（光标挪了、内容刷新了、窗格变了大小）：叫这边去读一下屏幕
+            "--bind", f"focus:{view},result:{view},resize:{view}",
             "--bind", "enter:ignore,double-click:ignore,esc:ignore",
         ]
 
@@ -822,11 +915,11 @@ class Sidebar:
         except (OSError, ValueError, HerdrError):
             pass
         width = self.width()
-        rows, header = self.rows(width), self.header(width)
+        rows, header, footer = self.rows(width), self.header(width), self.footer()
         self.rows_file.write_text(rows)
-        self.pushed = (rows, header)
+        self.pushed = (rows, header, footer)
         with open(self.rows_file, "rb") as stdin:
-            self.proc = subprocess.Popen(self.fzf_cmd(header), stdin=stdin, stdout=subprocess.PIPE)
+            self.proc = subprocess.Popen(self.fzf_cmd(header, footer), stdin=stdin, stdout=subprocess.PIPE)
 
     def stop_fzf(self):
         if self.proc and self.proc.poll() is None:
@@ -861,6 +954,8 @@ class Sidebar:
                     break                                     # fzf 自己退出了
                 now = time.monotonic()
                 timeout = min(TICK, max(0.0, self.due[0] - now)) if self.due else TICK
+                if self.view_at:
+                    timeout = min(timeout, max(0.0, self.view_at[0] - now))
                 r, _, _ = select.select([sub, fifo_r, self.wake_r, self.proc.stdout], [], [], timeout)
                 if self.proc and self.proc.stdout in r:
                     break
@@ -918,6 +1013,10 @@ class Sidebar:
                                     if p.get("focused") and p.get("tab_id") == (pane_info(self.target) or {}).get("tab_id")), None)
                     if self.tool and focused != self.tool[0]:
                         self.close_tool()
+                if self.view_at and self.view_at[0] <= time.monotonic():
+                    self.view_at = [t for t in self.view_at if t > time.monotonic()]
+                    if self.update_view() and not stale:
+                        self.push()
                 if stale:
                     if not self.refresh():
                         break
