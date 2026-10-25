@@ -29,7 +29,8 @@ statetrail is for the session you are in: it stays beside the live Claude and fo
 - **Follows herdr, adds only what herdr lacks.** Colours come from your herdr theme, and a tab you never named gets
   the Claude session's name. Claude's running / waiting state is not repeated: herdr's agent list already shows it.
 - **Your buttons.** A row at the bottom for your own tools — by default Git (lazygit), Files (yazi) and a shell. A tool
-  opens below Claude, in Claude's working directory: Claude keeps its width and only gets shorter, and the trail stays
+  opens below Claude, in Claude's working directory (Git takes 90% of its height, Files and the shell half): Claude
+  keeps its width and only gets shorter, and the trail stays
   usable beside it. The bottom row stays as it is. To close a tool: click its button again, quit the tool (`q` in
   lazygit and yazi, `Esc` in lazygit too, `exit` in the shell), or, for Git and Files, click anywhere outside it. Claude gets its
   height back and the focus. Clicking another button swaps the tool, so only one is open at a time. The third default
@@ -86,14 +87,16 @@ icons = "auto"            # "auto": Nerd Font icons if one is installed, else pl
 live_usage = true         # also ask for live 5h / 7d quota with your Claude login (see below); false: never
 lang = ""                 # "en" / "zh"; empty follows your locale
 tab_names = true          # name an unnamed tab after the Claude session
-tool_height = 0.5         # a bottom-button tool takes this share of the Claude pane's height (0.1–0.9)
+tool_height = 0.5         # a bottom-button tool takes this share of the Claude pane's height (0.1–0.9),
+                          # unless the button sets its own height
 
 # Bottom-row buttons. Writing any [[buttons]] replaces the default three.
 # A button shows its icon, or its label when it has no icon (or icons = "text").
 [[buttons]]
 label = "Git"
-command = "lazygit"       # opens to the right of Claude, in Claude's working directory (through sh -c)
+command = "lazygit"       # opens below Claude, in Claude's working directory (through sh -c)
 icon = "git"              # an icon name (git, files) or any single glyph
+height = 0.9              # share of the Claude pane's height; 0.9 is the most herdr allows
 
 [[buttons]]
 label = "Files"

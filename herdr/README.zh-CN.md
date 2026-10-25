@@ -23,7 +23,8 @@ statetrail 管的是你正在用的这个会话：贴在运行中的 Claude 旁�
   左上角的 `»` / `«` 一键在两种宽度之间切换。没有关闭按钮，窄版就是把它收起来的方式。
 - **跟着 herdr，只补它没有的。** 颜色取自你的 herdr 主题；没起过名的 tab 会用 Claude 的会话名命名。
   Claude 在不在干活这类状态不重复显示，herdr 左侧的 Agents 栏已经有了。
-- **自己的按钮。** 最底下一行放你自己的工具，默认是 Git（lazygit）、文件（yazi）和命令行。工具开在 Claude 下面、目录是 Claude 的：
+- **自己的按钮。** 最底下一行放你自己的工具，默认是 Git（lazygit）、文件（yazi）和命令行。工具开在 Claude 下面、目录是 Claude 的
+  （Git 占 Claude 那一格高度的 90%，文件和命令行占一半）：
   Claude 宽度不变、只是变矮，旁边的轨迹照样能点，底部栏不变。
   关掉它：再点一次同一个按钮、在工具里退出（lazygit 和 yazi 按 `q`，lazygit 按 `Esc` 也行，命令行输入 `exit`），
   Git 和文件点外面任何地方也会关。关掉后 Claude 恢复原来的高度、拿回焦点。开着一个时点另一个按钮就换过去，同时只开一个。
@@ -76,14 +77,15 @@ icons = "auto"            # "auto"：装了 Nerd Font 就用它的图标，没�
 live_usage = true         # 用你的 Claude 登录实时查额度（见下）；false：从不
 lang = ""                 # "en" / "zh"；不写就按系统 locale
 tab_names = true          # 没起过名的 tab 用 Claude 的会话名命名
-tool_height = 0.5         # 底部按钮开的工具占 Claude 那一格高度的比例（0.1–0.9）
+tool_height = 0.5         # 底部按钮开的工具占 Claude 那一格高度的比例（0.1–0.9），按钮自己写了 height 就按按钮的
 
 # 最底下一行的按钮。写了 [[buttons]] 就整组替换默认的三个。
 # 有图标就只画图标，没有图标（或 icons = "text"）就只写 label。
 [[buttons]]
 label = "Git"
-command = "lazygit"       # 开在 Claude 右边，目录是 Claude 那一格的（经 sh -c）
+command = "lazygit"       # 开在 Claude 下面，目录是 Claude 那一格的（经 sh -c）
 icon = "git"              # 图标名（git、files）或者直接写一个字形
+height = 0.9              # 占 Claude 那一格高度的比例，0.9 是 herdr 允许的最大值
 
 [[buttons]]
 label = "文件"
