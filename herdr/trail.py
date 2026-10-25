@@ -544,6 +544,7 @@ class Sidebar:
         self.tool_sticky = False              # 这个工具不跟着「点外面就关」（命令行）
         self.plugins = []                     # 装了的其他 herdr 插件（load_plugins）：打开时、点 ⟳ 时、plugins.json 改了时读
         self.plugins_mtime = None             # 上次看到的 plugins.json 修改时间
+        self.plugin_tabs = {}                 # {(插件, action): 它给这个 Claude 开的标签页}：再点就切过去，不再开
         self.foot_rows = []                   # 底部每一行的按钮，画和点都按它
         self.foot_shift = {}                  # {第几行: 行首给 ▼ 留了几列}
         self.code, self.code_new = code_sig(), None   # 启动时的代码 / 刚看到、还要再确认一次的新代码
@@ -1013,13 +1014,37 @@ class Sidebar:
     # -- 其他 herdr 插件 --
 
     def run_plugin(self, plugin, action):
-        """调别的插件的 action：先把焦点交回 Claude（点轨迹时焦点到了轨迹上，对方插件按焦点干活）。"""
+        """调别的插件的 action：先把焦点交回 Claude（点轨迹时焦点到了轨迹上，对方插件按焦点干活，比如 zoetrope 画的是
+        焦点所在那个 agent 的会话）。插件要是开了一个新标签页，就切过去并记下来：再点同一个按钮直接切到那一页，
+        不再开第二个（zoetrope 自己的「再按一次就关」只在焦点正好在它的窗格上时才算，从轨迹点永远不算）。
+        只开窗格、不开标签页的插件（比如 sidebar）不记，照旧每次都调。"""
+        key = (plugin, action)
+        tab = self.plugin_tabs.get(key)
         try:
+            if tab and any(t.get("tab_id") == tab for t in call("tab.list").get("tabs") or []):
+                call("tab.focus", tab_id=tab)
+                return
+            self.plugin_tabs.pop(key, None)                 # 那一页已经被你关了：重新开
+            before = {t.get("tab_id") for t in call("tab.list").get("tabs") or []}
             call("pane.focus", pane_id=self.target)
             call("plugin.action.invoke", plugin_id=plugin, action_id=action,
                  context={"focused_pane_id": self.target, "invocation_source": PLUGIN_ID})
         except (OSError, ValueError, HerdrError) as e:
             self.say(f"{plugin}: {e}")
+            return
+
+        def watch():                                        # 插件的命令是另起进程跑的，新标签页过一会儿才出现
+            for _ in range(30):
+                time.sleep(0.1)
+                try:
+                    new = [t["tab_id"] for t in call("tab.list").get("tabs") or [] if t.get("tab_id") not in before]
+                    if new:
+                        self.plugin_tabs[key] = new[0]
+                        call("tab.focus", tab_id=new[0])
+                        return
+                except (OSError, ValueError, KeyError, HerdrError):
+                    return
+        threading.Thread(target=watch, daemon=True).start()
 
     def plugin_menu(self):
         """⋯：用 herdr 的 popup 列出所有插件的所有 action（trail.py menu），选中的那一条经 FIFO 送回来再调。

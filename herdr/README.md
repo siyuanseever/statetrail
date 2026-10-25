@@ -48,7 +48,9 @@ statetrail is for the session you are in: it stays beside the live Claude and fo
   give it an `icon` in the config. A button runs the plugin's first action that works on
   this machine, in its manifest's order (herdr-sidebar: `open-sidebar`). Exception: zoetrope's first action opens an
   overlay, and herdr's overlay covers the whole tab, trail included, so its button runs `open-tab` instead
-  (`open-split` would squeeze Claude from 83 to 42 columns; a new tab leaves this one untouched). What doesn't fit
+  (`open-split` would squeeze Claude from 83 to 42 columns; a new tab leaves this one untouched). A plugin that opens
+  a new tab: the button switches to it, remembers it for this Claude, and on the next click just switches back there
+  instead of opening another one (a new one again only after you close it). What doesn't fit
   goes into `⋯`, which pops up every action of every plugin, with names: click one to run it, `Esc` to cancel. The list is read
   when the trail opens, when you click `⟳`, and when herdr's `plugins.json` changes (install / uninstall), so an
   uninstalled plugin's button goes away by itself within a few seconds.
