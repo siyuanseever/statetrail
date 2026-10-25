@@ -40,4 +40,5 @@ command = ["python3", "trail.py", "pane"]
 id = "tool"
 title = "Tool"
 placement = "split"
-command = ["sh", "-c", "cd \"${STATETRAIL_CWD:-$PWD}\" && exec sh -c \"$STATETRAIL_CMD\""]
+# 目录进不去（被删了）就在家目录里开，别让窗格一闪就没了
+command = ["sh", "-c", "cd \"${STATETRAIL_CWD:-$PWD}\" 2>/dev/null || cd \"$HOME\"; exec sh -c \"$STATETRAIL_CMD\""]

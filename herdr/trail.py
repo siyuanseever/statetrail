@@ -311,6 +311,13 @@ def hang(line, tag, room):
     return line + " " * max(1 if keep else 0, room - R.cols(line) - tw) + tag, room - tw + 1
 
 
+def live_dir(path):
+    """这个目录还在就原样返回；被删了（比如 Claude 开在一个已经收掉的 worktree 里）就退到还在的上一级。"""
+    while path and not os.path.isdir(path):
+        path = os.path.dirname(path)
+    return path or str(Path.home())
+
+
 def short_model(model):
     """`Opus 5.5/high` → `Opus5.5/hi`：窄版一行只有十来列。"""
     name, _, effort = (model or "").partition("/")
@@ -753,7 +760,12 @@ class Sidebar:
         if not shutil.which(prog):
             self.say(_t("找不到 {p}").format(p=prog))
             return
-        cwd = (pane_info(self.target) or {}).get("foreground_cwd") or ""
+        want = (pane_info(self.target) or {}).get("foreground_cwd") or ""
+        cwd = live_dir(want) if want else ""
+        if want and cwd != want:              # 不然 cd 失败，窗格一闪就关，什么也看不到（用户 2026-10-25 报的）
+            home = str(Path.home())
+            short = "~" + cwd[len(home):] if cwd == home or cwd.startswith(home + "/") else cwd
+            self.say(_t("Claude 的目录已经不在了，改在 {d} 打开").format(d=short), 8)
         env = {"STATETRAIL_CWD": cwd, "STATETRAIL_CMD": cmd, "PATH": os.environ.get("PATH", "")}
         if prog == "lazygit":                 # 在最外层按 Esc 也退出，和 yazi 一样（叠加在你自己的配置后面）
             mine = Path(sh_out("lazygit", "--print-config-dir").strip() or "/nonexistent") / "config.yml"
