@@ -18,6 +18,7 @@ TIME_C = "\033[38;2;0;135;215m"    # 蓝：窗口已经走过的时间 / 自动�
 GREY = "\033[38;2;108;108;108m"
 DIMC = "\033[38;2;88;88;88m"
 CYAN = "\x1b[36m"
+REVERSE, NO_REVERSE = "\x1b[7m", "\x1b[27m"   # 反色：开着的工具，它的按钮整格反过来
 BUSY_C = WARN_C                    # 状态：工作中（窄版的状态点、还在干活的那一轮）
 DONE_C = DIMC                      # 状态：完成 / 空闲
 COLORS = ("USED_C", "WARN_C", "ALERT_C", "TIME_C", "GREY", "DIMC", "CYAN", "BUSY_C", "DONE_C")

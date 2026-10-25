@@ -23,9 +23,12 @@ statetrail 管的是你正在用的这个会话：贴在运行中的 Claude 旁�
   左上角的 `»` / `«` 一键在两种宽度之间切换。没有关闭按钮，窄版就是把它收起来的方式。
 - **跟着 herdr，只补它没有的。** 颜色取自你的 herdr 主题；没起过名的 tab 会用 Claude 的会话名命名。
   Claude 在不在干活这类状态不重复显示，herdr 左侧的 Agents 栏已经有了。
-- **自己的按钮。** 最底下一行放你自己的工具，默认是 Git（lazygit）、文件（yazi）和命令行。工具开在 Claude 右边、目录是 Claude 的，
-  左边的 Claude 还看得见；点它外面任何地方、或按 Esc / q 就关。第三个默认按钮 `›_` 是命令行，放 Claude 替你跑不了的命令
-  （要输密码的 `sudo`、要在浏览器里登录的 `gcloud auth login`、交互式的 `ssh`）：起始目录是 Claude 的，点别处不关，`exit` 或再点一次 `›_` 才关。
+- **自己的按钮。** 最底下一行放你自己的工具，默认是 Git（lazygit）、文件（yazi）和命令行。工具开在 Claude 下面、目录是 Claude 的：
+  Claude 宽度不变、只是变矮，旁边的轨迹照样能点。工具开着时它的按钮高亮、旁边出现 `✕`（窄版里按钮本身变成 `✕`）。
+  关掉它：再点一次同一个按钮、点 `✕`、在工具里退出（lazygit 和 yazi 按 `q`，lazygit 按 `Esc` 也行，命令行输入 `exit`），
+  Git 和文件点外面任何地方也会关。关掉后 Claude 恢复原来的高度、拿回焦点。开着一个时点另一个按钮就换过去，同时只开一个。
+  第三个默认按钮 `›_` 是命令行，放 Claude 替你跑不了的命令（要输密码的 `sudo`、要在浏览器里登录的 `gcloud auth login`、
+  交互式的 `ssh`）：起始目录是 Claude 的，点别处不关。
 - **自己跟着更新。** `herdr plugin update` 之后，开着的轨迹十秒左右就会发现，在原来那一格里换成新代码重启，位置和宽度都不变，
   不用关了再开。
 
@@ -67,6 +70,7 @@ icons = "auto"            # "auto"：装了 Nerd Font 就用它的图标，没�
 live_usage = true         # 用你的 Claude 登录实时查额度（见下）；false：从不
 lang = ""                 # "en" / "zh"；不写就按系统 locale
 tab_names = true          # 没起过名的 tab 用 Claude 的会话名命名
+tool_height = 0.5         # 底部按钮开的工具占 Claude 那一格高度的比例（0.1–0.9）
 
 # 最底下一行的按钮。写了 [[buttons]] 就整组替换默认的三个。
 # 有图标就只画图标，没有图标（或 icons = "text"）就只写 label。

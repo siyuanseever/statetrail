@@ -69,6 +69,8 @@ DEFAULTS = {
     "buttons": [{"label": "Git", "command": "lazygit", "icon": "git"},
                 {"label": "文件", "command": "yazi", "icon": "files"},
                 {"label": "命令行", "command": "$SHELL", "icon": "shell", "close_on_blur": False}],
+    # 按钮开的工具从 Claude 下面切出来（Claude 宽度不变，只是变矮；轨迹一直露在旁边能点），占 Claude 那一格高度的比例
+    "tool_height": 0.5,
 }
 
 
@@ -86,6 +88,10 @@ def config():
         cfg["width"] = min(0.9, max(0.1, float(cfg["width"])))
     except (TypeError, ValueError):
         cfg["width"] = DEFAULTS["width"]
+    try:
+        cfg["tool_height"] = min(0.9, max(0.1, float(cfg["tool_height"])))
+    except (TypeError, ValueError):
+        cfg["tool_height"] = DEFAULTS["tool_height"]
     for key, allowed in (("default_mode", ("wide", "narrow")), ("icons", ("auto", "nerd", "unicode", "text"))):
         if cfg[key] not in allowed:
             cfg[key] = DEFAULTS[key]
@@ -120,7 +126,6 @@ FRAME = 2                          # herdr 给窗格画的边框：tty 比 pane.
 # 宽版最多挤到 Claude 剩多少列：Claude 自己的 /diff 面板要终端至少 110 列才开得出来
 # （code.claude.com/docs/en/interactive-mode.md「Diff panel」）。放不下宽版就用窄版
 CLAUDE_MIN = 110
-TOOL_SHARE = 0.6                   # 按钮开的工具（lazygit / yazi）占 Claude 那一块的比例，左边的 Claude 还看得见
 RELOAD_EVERY = 5                   # 多久看一次插件代码换没换（herdr plugin update 装到了新目录，或者本地改了文件）
 GONE_GRACE = 15                    # Claude 退出后等多少秒才关轨迹：切账号时 Claude 会退出再重启
 LATER = (0.5, 1.5)                 # Claude 状态变了之后再补刷几次：Stop 时最后那条回复还没写进对话记录
@@ -238,6 +243,7 @@ ICONS = {
     "7d":      ("", "▦",     "7d"),
     "git":     ("", "±",     ""),         # 文字档不另加图标，按钮本身就有字
     "files":   ("", "▤",     ""),
+    "close":   ("", "✕",     "x"),        # 关掉开着的工具（底部高亮按钮旁边）
     "shell":   ("", "›_",    ""),         # 命令行按钮
 }
 _TIER = ("nerd", "unicode", "text").index(CFG["icons"])
@@ -285,18 +291,20 @@ def _cell_w(text):
 
 
 def buttons_line(buttons, u=None):
+    """buttons：(文字, 动作, 额外宽度[, 高亮])。高亮 = 整格反色（开着的工具）。"""
     cells = []
-    for text, act, extra in buttons:
+    for text, act, extra, *lit in buttons:
         w = _cell_w(text)
         pad = (w - R.cols(text)) // 2
-        cells.append(" " * pad + text + " " * (w - R.cols(text) - pad)
+        cell = " " * pad + text + " " * (w - R.cols(text) - pad)
+        cells.append((f"{R.REVERSE}{cell}{R.NO_REVERSE}" if lit and lit[0] else cell)
                      + R.fit(R.usage_state(u, time.time()) if act == "usage" else "", extra))
     return (" " * GAP).join(cells)
 
 
 def button_at(buttons, col):
     x = 1
-    for text, act, extra in buttons:
+    for text, act, extra, *_ in buttons:
         w = _cell_w(text) + extra
         if x <= col < x + w:
             return act
@@ -606,9 +614,23 @@ class Sidebar:
 
     def footer(self, width):
         """底部一行：配置里的自定义按钮，▼ 挂在右端（没配按钮就只有 ▼）。"""
-        line, self.down_at = hang(buttons_line(footer_buttons()) if footer_buttons() else "",
-                                  self.page_tag(1), max(4, width - 2))
+        cells = self.footer_cells()
+        line, self.down_at = hang(buttons_line(cells) if cells else "", self.page_tag(1), max(4, width - 2))
         return line or " "
+
+    def footer_cells(self):
+        """底部的按钮，画和点都按这一份算。开着工具时它的按钮反色，紧跟一个 ✕（点了关掉）；窄版放不下多一格，
+        就把那个按钮本身画成 ✕——点它本来就是关（再点一次同一个按钮 = 关）。"""
+        open_act = f"tool:{self.tool[1]}" if self.tool else None
+        out = []
+        for text, act, extra in footer_buttons():
+            if act != open_act:
+                out.append((text, act, extra))
+            elif self.mode == "narrow":
+                out.append((icon("close"), "close_tool", extra, True))
+            else:
+                out += [(text, act, extra, True), (icon("close"), "close_tool", 0)]
+        return out
 
     def page_tag(self, d):
         """列表上面还有几轮（▲ 73）、下面还有几轮（▼ 5），点一下翻一页；窄版写成「▲73」「▼5」。
@@ -752,7 +774,7 @@ class Sidebar:
             if self.down_at and int(parts[2]) >= self.down_at - 1:
                 self.page(1)
                 return
-            act = button_at(footer_buttons(), int(parts[2]))
+            act = button_at(self.footer_cells(), int(parts[2]))
             if act:
                 self.act(act)
         elif parts[0] == "toggle":            # 插件动作（快捷键）：拉到窄版 / 拉回宽版
@@ -770,6 +792,10 @@ class Sidebar:
             self.set_mode(act)
         elif act.startswith("tool:"):
             self.run_tool(CFG["buttons"][int(act[5:])])
+            self.push()                       # 底部的高亮 / ✕ 跟上
+        elif act == "close_tool":
+            self.close_tool()
+            self.push()
 
     def run_tool(self, button):
         """配置里的按钮。command：在 Claude 那一格的目录里开本插件的浮窗（manifest 的 tool 窗格），经 sh -c 跑它；
@@ -809,14 +835,19 @@ class Sidebar:
         if prog == "lazygit":                 # 在最外层按 Esc 也退出，和 yazi 一样（叠加在你自己的配置后面）
             mine = Path(sh_out("lazygit", "--print-config-dir").strip() or "/nonexistent") / "config.yml"
             env["LG_CONFIG_FILE"] = ",".join([*([str(mine)] if mine.exists() else []), str(HERE / "tools" / "lazygit.yml")])
-        # 开在 Claude 右边、占 Claude 那一块的 TOOL_SHARE，左边的 Claude 还看得见；点外面（焦点挪走）就关。
-        # 不用 herdr 的 popup：它只能居中、是整个会话的模态窗口，盖住 Claude、点外面也不关（用户 2026-10-25 报的）。
-        # herdr 0.9.5 没有 tmux 那种不挤别人的浮动窗格，所以 Claude 会暂时变窄、重新换行。
+        # 从 Claude 下面切出来，占 Claude 那一格高度的 tool_height：Claude 宽度不变、只是变矮，轨迹一直露在旁边能点
+        # （用户 2026-10-25 定的）。没用的两条路：herdr 的 overlay 会盖满整个标签页，连轨迹一起盖住；popup 只能居中，
+        # 开着时整个会话只认它，轨迹点不了、点外面也不关（2026-10-25 实测）。
         try:
             r = call("plugin.pane.open", plugin_id=PLUGIN_ID, entrypoint="tool", placement="split",
-                     target_pane_id=self.target, direction="right", focus=True, env=env)
+                     target_pane_id=self.target, direction="down", focus=True, env=env)
             pane = r["plugin_pane"]["pane"]["pane_id"]
-            call("pane.resize", pane_id=pane, direction="left", amount=TOOL_SHARE - 0.5)
+            # 切出来是对半分；挪中间那条线：工具要高就把工具往上推，要矮就把 Claude 往下推（只挪两格之间那条线）
+            h = CFG["tool_height"]
+            if h > 0.5:
+                call("pane.resize", pane_id=pane, direction="up", amount=h - 0.5)
+            elif h < 0.5:
+                call("pane.resize", pane_id=self.target, direction="down", amount=0.5 - h)
             self.tool, self.tool_check = (pane, index), None
             self.tool_sticky = button.get("close_on_blur", True) is False
         except (OSError, ValueError, KeyError, HerdrError) as e:
@@ -833,10 +864,13 @@ class Sidebar:
             return None
         return sig[0] if compiles(Path(sig[0])) else None
 
-    def close_tool(self):
+    def close_tool(self, focus=True):
+        """关掉开着的工具；Claude 那一格自己长回原来的高度，焦点还给 Claude。"""
         if self.tool:
             try:
                 call("pane.close", pane_id=self.tool[0])
+                if focus:
+                    call("pane.focus", pane_id=self.target)
             except (OSError, ValueError, HerdrError):
                 pass
         self.tool, self.tool_check = None, None
@@ -1068,7 +1102,8 @@ class Sidebar:
                         if name in ("pane_closed", "pane_exited") and data.get("pane_id") == self.target:
                             gone = True
                         if self.tool and name in ("pane_closed", "pane_exited") and data.get("pane_id") == self.tool[0]:
-                            self.tool, self.tool_check = None, None   # 在工具里按 q / Esc 退出了，窗格自己关了
+                            self.tool, self.tool_check = None, None   # 在工具里按 q / Esc / exit 退出了，窗格自己关了
+                            stale = True                              # 底部的高亮 / ✕ 跟着收掉
                             try:                                      # herdr 会把焦点给隔壁（轨迹），还给 Claude
                                 call("pane.focus", pane_id=self.target)
                             except (OSError, ValueError, HerdrError):
@@ -1096,6 +1131,7 @@ class Sidebar:
                                     if p.get("focused") and p.get("tab_id") == (pane_info(self.target) or {}).get("tab_id")), None)
                     if self.tool and focused != self.tool[0]:
                         self.close_tool()
+                        stale = True                          # 底部的高亮 / ✕ 跟着收掉
                 if self.reload_at <= time.monotonic():
                     self.reload_at = time.monotonic() + RELOAD_EVERY
                     self.restart = self.code_changed()
@@ -1116,7 +1152,7 @@ class Sidebar:
                         self.push()
         finally:
             self.jump_token += 1
-            self.close_tool()
+            self.close_tool(focus=False)
             # 原地重启时登记留着：换代码那零点几秒里，别让自动打开以为这里没有轨迹、再开一个
             for p in ((self.reg,) if not self.restart else ()) + (self.fifo, self.sock, self.rows_file,
                                                                    self.rows_file.with_suffix(".tmp")):
