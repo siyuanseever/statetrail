@@ -25,6 +25,8 @@ statetrail 管的是你正在用的这个会话：贴在运行中的 Claude 旁�
   Claude 在不在干活这类状态不重复显示，herdr 左侧的 Agents 栏已经有了。
 - **自己的按钮。** 最底下一行放你自己的工具，默认是 Git（lazygit）和文件（yazi）。工具开在 Claude 右边、目录是 Claude 的，
   左边的 Claude 还看得见；点它外面任何地方、或按 Esc / q 就关。
+- **自己跟着更新。** `herdr plugin update` 之后，开着的轨迹十秒左右就会发现，在原来那一格里换成新代码重启，位置和宽度都不变，
+  不用关了再开。
 
 ## 安装
 
@@ -96,6 +98,7 @@ icon = "files"
 
   表头会写出数字有多旧；重置时间已经过了的窗口显示「?」，不显示旧数字。
 - **发键** 给 Claude 窗格只为滚屏（PageUp / PageDown / Ctrl+Home / Ctrl+End / 滚轮），从不往输入框里打字。
+- **查有没有更新** 每 5 秒一次：读 herdr 自己的 `plugins.json` 和本插件代码文件的修改时间，不联网。
 - 它自己的状态放在插件的状态目录（`~/.local/state/herdr/plugins/statetrail/`）。
 
 ## 不碰凭据也能拿到新数字：Status Line 桥接（可选）

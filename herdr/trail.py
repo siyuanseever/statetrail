@@ -118,6 +118,7 @@ FRAME = 2                          # herdr 给窗格画的边框：tty 比 pane.
 # （code.claude.com/docs/en/interactive-mode.md「Diff panel」）。放不下宽版就用窄版
 CLAUDE_MIN = 110
 TOOL_SHARE = 0.6                   # 按钮开的工具（lazygit / yazi）占 Claude 那一块的比例，左边的 Claude 还看得见
+RELOAD_EVERY = 5                   # 多久看一次插件代码换没换（herdr plugin update 装到了新目录，或者本地改了文件）
 GONE_GRACE = 15                    # Claude 退出后等多少秒才关轨迹：切账号时 Claude 会退出再重启
 LATER = (0.5, 1.5)                 # Claude 状态变了之后再补刷几次：Stop 时最后那条回复还没写进对话记录
 VERSION = re.compile(r"^\d+\.\d+\.\d+$")   # Claude Code 的进程名是版本号
@@ -371,6 +372,34 @@ class HerdrTerm:
         call("pane.send_text", pane_id=self.pane, text="".join(self.KEYS.get(k, k) for k in keys))
 
 
+def code_sig():
+    """(herdr 登记的插件目录, 那里各个代码文件的修改时间)。插件一更新它就变，轨迹据此自己重启（见 Sidebar.run）。
+    herdr plugin update 会装进一个新目录，旧目录里的文件不变，所以要看 herdr 的登记（plugins.json）。"""
+    root = HERE
+    try:
+        for p in json.loads((CONFIG_DIR.parents[2] / "plugins.json").read_text()):
+            if p.get("plugin_id") == PLUGIN_ID and p.get("plugin_root"):
+                root = Path(p["plugin_root"])
+    except (OSError, ValueError, AttributeError, TypeError, IndexError):
+        pass
+    files = [root / "trail.py", root / "theme.py", root / "herdr-plugin.toml", root / "core" / "en.tsv",
+             *sorted((root / "core").glob("*.py"))]
+    try:
+        return str(root), tuple(f.stat().st_mtime_ns for f in files)
+    except OSError:
+        return str(root), None                # 装到一半、文件还不全：这次不算
+
+
+def compiles(root):
+    """新代码至少能编译，才换过去；换过去起不来，这一格就只剩个空窗格了。"""
+    try:
+        for f in (root / "trail.py", root / "theme.py", *(root / "core").glob("*.py")):
+            compile(f.read_bytes(), str(f), "exec")
+        return True
+    except (OSError, SyntaxError, ValueError):
+        return False
+
+
 # ---- 轨迹本体 --------------------------------------------------------------------
 
 class Sidebar:
@@ -400,6 +429,9 @@ class Sidebar:
         self.no_claude_since = None           # 这一格里从什么时候起不是 Claude 了
         self.tool = None                      # (工具窗格, 第几个按钮)：开着的 lazygit / yazi 之类
         self.tool_check = None                # 焦点离开工具窗格的时刻：0.4 秒后还不在它身上就关
+        self.code, self.code_new = code_sig(), None   # 启动时的代码 / 刚看到、还要再确认一次的新代码
+        self.reload_at = time.monotonic() + RELOAD_EVERY
+        self.restart = None                   # 要换成的新插件目录：主循环退出后 cmd_pane 原地 exec 过去
         self.wake_r, self.wake_w = os.pipe()  # 跳转线程 / 额度线程 / 信号 叫醒主循环
         os.set_blocking(self.wake_w, False)
 
@@ -782,6 +814,17 @@ class Sidebar:
         except (OSError, ValueError, KeyError, HerdrError) as e:
             self.say(f"{prog}: {e}")
 
+    def code_changed(self):
+        """插件代码换了（连着两次看到同一份新代码，免得装到一半就换），而且新代码能编译：返回新目录。"""
+        sig = code_sig()
+        if sig == self.code or sig[1] is None:
+            self.code_new = None
+            return None
+        if sig != self.code_new:
+            self.code_new = sig
+            return None
+        return sig[0] if compiles(Path(sig[0])) else None
+
     def close_tool(self):
         if self.tool:
             try:
@@ -987,6 +1030,7 @@ class Sidebar:
                 timeout = min(TICK, max(0.0, self.due[0] - now)) if self.due else TICK
                 if self.view_at:
                     timeout = min(timeout, max(0.0, self.view_at[0] - now))
+                timeout = min(timeout, max(0.0, self.reload_at - now))
                 r, _, _ = select.select([sub, fifo_r, self.wake_r, self.proc.stdout], [], [], timeout)
                 if self.proc and self.proc.stdout in r:
                     break
@@ -1044,6 +1088,11 @@ class Sidebar:
                                     if p.get("focused") and p.get("tab_id") == (pane_info(self.target) or {}).get("tab_id")), None)
                     if self.tool and focused != self.tool[0]:
                         self.close_tool()
+                if self.reload_at <= time.monotonic():
+                    self.reload_at = time.monotonic() + RELOAD_EVERY
+                    self.restart = self.code_changed()
+                    if self.restart:
+                        break                                 # 插件更新了：收掉 fzf，原地换成新代码（cmd_pane）
                 if self.view_at and self.view_at[0] <= time.monotonic():
                     self.view_at = [t for t in self.view_at if t > time.monotonic()]
                     if self.update_view() and not stale:
@@ -1060,7 +1109,9 @@ class Sidebar:
         finally:
             self.jump_token += 1
             self.close_tool()
-            for p in (self.reg, self.fifo, self.sock, self.rows_file, self.rows_file.with_suffix(".tmp")):
+            # 原地重启时登记留着：换代码那零点几秒里，别让自动打开以为这里没有轨迹、再开一个
+            for p in ((self.reg,) if not self.restart else ()) + (self.fifo, self.sock, self.rows_file,
+                                                                   self.rows_file.with_suffix(".tmp")):
                 p.unlink(missing_ok=True)
             self.stop_fzf()
             sub.close()
@@ -1092,7 +1143,11 @@ def cmd_pane():
         print(_t("装好以后关掉这个窗格，再打开一次。"))
         signal.pause()
         return
-    Sidebar(target, me).run()
+    sb = Sidebar(target, me)
+    sb.run()
+    if sb.restart:                             # 插件更新了：同一个窗格原地换成新目录里的代码，位置、宽度都不动
+        os.chdir(sb.restart)
+        os.execv(sys.executable, [sys.executable, "trail.py", "pane"])
 
 
 # ---- 开 / 切 ---------------------------------------------------------------------

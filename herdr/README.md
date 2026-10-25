@@ -31,6 +31,8 @@ statetrail is for the session you are in: it stays beside the live Claude and fo
 - **Your buttons.** A row at the bottom for your own tools — by default Git (lazygit) and Files (yazi). A tool opens
   to the right of Claude in Claude's working directory, so Claude stays visible on the left; click anywhere outside it,
   or press Esc / q, to close it.
+- **Updates itself in place.** After `herdr plugin update`, each open trail notices within about ten seconds and
+  restarts in the same pane with the new code, keeping its place and width. No need to close and reopen it.
 
 ## Install
 
@@ -107,6 +109,8 @@ icon = "files"
   The header says how old the numbers are, and a window whose reset time has passed shows `?` rather than a stale number.
 - **Sends keys** to the Claude pane only to scroll it (PageUp / PageDown / Ctrl+Home / Ctrl+End / mouse wheel).
   It never types into the prompt.
+- **Checks for updates** every 5 seconds by reading herdr's own `plugins.json` and the modification times of its
+  code files. Nothing goes over the network.
 - Its own state lives in the plugin's state directory (`~/.local/state/herdr/plugins/statetrail/`).
 
 ## Fresh quota without credentials: the status line bridge (optional)
