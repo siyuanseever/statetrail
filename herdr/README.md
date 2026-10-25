@@ -17,8 +17,9 @@ statetrail is for the session you are in: it stays beside the live Claude and fo
 
 - **The trail.** One row per turn. Click a row and Claude jumps there, usually in well under a second.
   Turns before a `/compact` fold into one row. The list refreshes as soon as Claude starts or stops working.
-  When the list is longer than the pane, a line above it says `▲ 12 earlier` and one below says `▼ 5 newer`
-  (`▲12` / `▼5` in the narrow version); click one to page by a screenful.
+  When the list is longer than the pane, `▲ 12` at the right end of the line above it and `▼ 5` at the right end
+  of the line below it say how many turns are out of view (`▲12` / `▼5` in the narrow version); click one to page by
+  a screenful.
 - **Model, account, quota.** `ctx`, `5h` and `7d` bars, grey while things are fine and coloured only when they
   are not: a quota bar turns orange or red when you are using it faster than the window passes, not just when it is
   high. Two Claude accounts at once (separate `CLAUDE_CONFIG_DIR`s) are fine; each pane shows its own.

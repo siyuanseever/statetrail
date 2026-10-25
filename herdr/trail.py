@@ -299,6 +299,18 @@ def button_at(buttons, col):
     return None
 
 
+def hang(line, tag, room):
+    """把 tag 右对齐挂在 line 的右端，总宽 room。放不下先截左边的字，tag 不截。
+    返回 (这一行, tag 从第几列起)；没有 tag 就原样返回 (line, None)。"""
+    if not tag:
+        return line, None
+    tw = R.cols(tag)
+    keep = max(0, room - tw - 1)               # 左边的字和 tag 之间至少隔一格
+    if R.cols(line) > keep:
+        line = R.clip(line, keep) + R.RESET
+    return line + " " * max(1 if keep else 0, room - R.cols(line) - tw) + tag, room - tw + 1
+
+
 def short_model(model):
     """`Opus 5.5/high` → `Opus5.5/hi`：窄版一行只有十来列。"""
     name, _, effort = (model or "").partition("/")
@@ -368,7 +380,9 @@ class Sidebar:
         self.pushed = (None, None, None)      # 上次推给 fzf 的 (列表, 表头, 底部)
         self.view = (0, 0, 0)                 # 列表现在露出来的范围：(上面还有几轮, 下面还有几轮, 露出来几项)
         self.view_at = []                     # 什么时候去读一下自己的屏幕，更新 view
-        self.up_ln = None                     # 「▲ 更早 N 轮」是表头的第几行（点表头时按行号认）
+        self.up_at = None                     # 表头里的 ▲：(第几行, 从第几列起)，点表头时按行、列认
+        self.head_ln = None                   # 宽版「N 轮 / 已压缩」那一行是表头第几行（点它不查额度，和挪下来之前一样）
+        self.down_at = None                   # 底部第 1 行里的 ▼ 从第几列起
         self.flash = None                     # (一句提示, 到什么时候为止)
         self.mc = (None, ("", ""))            # (对话记录大小, model_ctx)：没变就不重读尾巴
         self.due = []                         # 预约的补刷时间
@@ -521,8 +535,8 @@ class Sidebar:
         for prio in (1, 2, 3):
             fields = [(p, ln) for p, ln in fields if p != prio or R.cols(ln) <= room]
         lines += [ln for _, ln in fields]
-        lines.append(self.page_line(-1))
-        self.up_ln = len(lines)
+        lines[-1], col = hang(lines[-1], self.page_tag(-1), room)
+        self.up_at = (len(lines), col) if col else None
         return "\n".join(R.clip(ln, room) for ln in lines)
 
     def wide_header(self, width):
@@ -539,25 +553,27 @@ class Sidebar:
         model, ctx = self.model_ctx()
         lines = R.status_lines(width, model, ctx, u, claude.current_account(self.cfg_dir),
                                claude.auto_compact_at(), claude.CTX_HARD)
-        lines = [buttons_line(wide_buttons(), u), head, *lines, self.page_line(-1)]
-        self.up_ln = len(lines)
+        # 「N 轮已压缩 · 当前 M 轮」放在表头最后一行，紧挨着列表，▲ 挂在它右端（用户定的）
+        lines = [buttons_line(wide_buttons(), u), *lines, head]
+        self.head_ln = len(lines)
+        lines[-1], col = hang(lines[-1], self.page_tag(-1), width - 2)
+        self.up_at = (len(lines), col) if col else None
         return "\n".join(lines)
 
-    def footer(self):
-        """底部：第 1 行「▼ 更新 N 轮」，下面是配置里的自定义按钮（没配就只有这一行）。"""
-        return "\n".join([self.page_line(1), *([buttons_line(footer_buttons())] if footer_buttons() else [])])
+    def footer(self, width):
+        """底部一行：配置里的自定义按钮，▼ 挂在右端（没配按钮就只有 ▼）。"""
+        line, self.down_at = hang(buttons_line(footer_buttons()) if footer_buttons() else "",
+                                  self.page_tag(1), max(4, width - 2))
+        return line or " "
 
-    def page_line(self, d):
-        """列表上面一行「▲ 更早 12 轮」、下面一行「▼ 更新 5 轮」，点一下翻一页；窄版写成「▲12」「▼5」。
-        那一边已经到头就留一个空行，不收掉：收掉的话表头 / 底部少一行，列表会跟着上下跳。"""
+    def page_tag(self, d):
+        """列表上面还有几轮（▲ 73）、下面还有几轮（▼ 5），点一下翻一页；窄版写成「▲73」「▼5」。
+        挂在已有那一行的右端，不单独占行：有没有它，表头和底部的行数都不变，列表不会跳。到头了就不画。"""
         n = self.view[0] if d < 0 else self.view[1]
         if not n:
-            return " "
+            return ""
         arrow = "▲" if d < 0 else "▼"
-        if self.mode == "narrow":
-            return f"{R.GREY}{arrow}{n}{R.RESET}"
-        text = _t("更早 {n} 轮") if d < 0 else _t("更新 {n} 轮")
-        return f"{R.GREY}{arrow} {text.format(n=n)}{R.RESET}"
+        return f"{R.GREY}{arrow}{'' if self.mode == 'narrow' else ' '}{n}{R.RESET}"
 
     def rows(self, width):
         if not self.tr:
@@ -569,7 +585,7 @@ class Sidebar:
 
     def push(self):
         width = self.width()
-        rows, header, footer = self.rows(width), self.header(width), self.footer()
+        rows, header, footer = self.rows(width), self.header(width), self.footer(width)
         last_rows, last_header, last_footer = self.pushed
         # 表头、底部、列表分开发（tmux 版踩过：写在同一条里 fzf 会把后面的 change-header 吞掉）
         if header != last_header and not fzf(self.sock, "change-header:" + header):
@@ -671,7 +687,7 @@ class Sidebar:
             ln, col = parts[1], parts[2]
             if not (ln.isdigit() and col.isdigit()):
                 return
-            if int(ln) == self.up_ln:          # 表头最后一行「▲ 更早 N 轮」
+            if self.up_at and int(ln) == self.up_at[0] and int(col) >= self.up_at[1] - 1:   # 点在 ▲ 那一段（偏一格也算）
                 self.page(-1)
                 return
             if self.mode == "narrow":
@@ -680,15 +696,18 @@ class Sidebar:
                 elif int(ln) >= 2:             # 模型、账号、百分比那几行：查一次额度
                     self.kick_usage(force=True)
                 return
-            if int(ln) >= 3:                   # 宽版的模型 / ctx / 5h / 7d 那几行：去查一次真实额度
+            if int(ln) == self.head_ln:        # 「N 轮 / 已压缩」那一行（▲ 之外）：什么都不做
+                return
+            if int(ln) >= 2:                   # 宽版的模型 / ctx / 5h / 7d 那几行：去查一次真实额度
                 self.kick_usage(force=True)
                 return
             act = button_at(wide_buttons(), int(col)) if ln == "1" else None
             if act:
                 self.act(act)
-        elif parts[0] == "foot" and len(parts) > 2 and parts[1] == "1":     # 底部第 1 行「▼ 更新 N 轮」
-            self.page(1)
-        elif parts[0] == "foot" and len(parts) > 2 and parts[1] == "2" and parts[2].isdigit():   # 第 2 行：自定义按钮
+        elif parts[0] == "foot" and len(parts) > 2 and parts[1] == "1" and parts[2].isdigit():   # 底部：自定义按钮，右端是 ▼
+            if self.down_at and int(parts[2]) >= self.down_at - 1:
+                self.page(1)
+                return
             act = button_at(footer_buttons(), int(parts[2]))
             if act:
                 self.act(act)
@@ -915,7 +934,7 @@ class Sidebar:
         except (OSError, ValueError, HerdrError):
             pass
         width = self.width()
-        rows, header, footer = self.rows(width), self.header(width), self.footer()
+        rows, header, footer = self.rows(width), self.header(width), self.footer(width)
         self.rows_file.write_text(rows)
         self.pushed = (rows, header, footer)
         with open(self.rows_file, "rb") as stdin:
