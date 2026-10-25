@@ -1,21 +1,19 @@
-//! 画轨迹：表头（第 1 步只有「N 轮」那一行）、一条分隔线、列表。列表自己记滚动位置（不再靠 fzf，也不再读自己的屏幕），
-//! 画的时候顺手记下每一行是哪一项，点击就按它认。格式和 Python 版 core/render.py 的 rows_of / narrow_rows_of 一样：
+//! 画轨迹：表头、一条整行的分隔线、列表。列表自己记滚动位置（不再靠 fzf，也不再读自己的屏幕），画的时候顺手记下
+//! 每一行是哪一项，点击就按它认。列表的格式和 Python 版 core/render.py 的 rows_of / narrow_rows_of 一样：
 //! 宽版每轮两行（轮号 时间 你说的话 / 回复的开头），轮与轮之间一行虚线；窄版每轮一行（轮号 你说的话）。
+//! 不加边框、不加盒子：只有分隔线，和 Python 版（fzf 的表头分隔线）一样克制。
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::i18n::t;
+use crate::render::SLine;
+use crate::theme::colors;
 use crate::transcript::Stop;
-
-pub const GREY: Color = Color::Rgb(108, 108, 108);
-pub const DIM: Color = Color::Rgb(88, 88, 88);
-pub const BUSY: Color = Color::Rgb(215, 135, 0);
-pub const ACCENT: Color = Color::Rgb(0, 135, 215);
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Item {
@@ -30,8 +28,6 @@ pub struct View<'a> {
     pub opened: Option<&'a str>,
     pub busy: bool,
     pub missing: &'a std::collections::HashSet<String>,
-    pub flash: Option<&'a str>,
-    pub found: bool, // 找到了这个 Claude 的会话没有
 }
 
 impl View<'_> {
@@ -48,27 +44,30 @@ impl View<'_> {
         out
     }
 
-    fn gone(&self) -> usize {
+    pub fn gone(&self) -> usize {
         self.stops.iter().filter(|s| s.compacted).count()
     }
 }
 
-/// 按显示宽度截（中文算两格），截了就补个省略号。
-pub fn clip(s: &str, width: usize) -> String {
+/// 按显示宽度截（中文算两格）；ellipsis 时截了补个「…」（宽版的行，和 fzf 的 --ellipsis 一样）。
+pub fn clip(s: &str, width: usize, ellipsis: bool) -> String {
     if s.width() <= width {
         return s.to_owned();
     }
     let mut out = String::new();
     let mut w = 0;
+    let room = if ellipsis { width.saturating_sub(1) } else { width };
     for c in s.chars() {
         let cw = c.width().unwrap_or(0);
-        if w + cw + 1 > width {
+        if w + cw > room {
             break;
         }
         out.push(c);
         w += cw;
     }
-    out.push('…');
+    if ellipsis {
+        out.push('…');
+    }
     out
 }
 
@@ -109,22 +108,26 @@ pub fn when(ts: Option<&str>) -> String {
 
 /// 一项画出来的几行（不含左边 2 列：指针 + 空格，由 draw 加）。
 fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
-    let dim = Style::default().fg(DIM);
+    let c = colors();
+    let faint = Style::default().add_modifier(Modifier::DIM);
+    let dimc = Style::default().fg(c.dim);
     match item {
         Item::Fold => {
             let n = v.gone();
-            let text = if v.narrow {
-                format!("1–{n} {}", if v.expanded { "−" } else { "+" })
+            if v.narrow {
+                let text = format!("1–{n} {}", if v.expanded { "−" } else { "+" });
+                return vec![Line::from(Span::styled(clip(&text, room, false), dimc))];
+            }
+            let act = if v.expanded { t("点这里收起") } else { t("点开展开") };
+            let tpl = if n > 1 {
+                t("第 1–{n} 轮已压缩 · {act}")
             } else {
-                let act = if v.expanded { t("点这里收起") } else { t("点开展开") };
-                let tpl = if n > 1 {
-                    t("第 1–{n} 轮已压缩 · {act}")
-                } else {
-                    t("第 1 轮已压缩 · {act}")
-                };
-                tpl.replace("{n}", &n.to_string()).replace("{act}", &act)
+                t("第 1 轮已压缩 · {act}")
             };
-            vec![Line::from(Span::styled(clip(&text, room), dim))]
+            vec![Line::from(Span::styled(
+                clip(&tpl.replace("{n}", &n.to_string()).replace("{act}", &act), room, true),
+                faint,
+            ))]
         }
         Item::Stop(i) => {
             let st = v.stops[i];
@@ -138,16 +141,16 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
             let missing = v.missing.contains(&st.id);
             if v.narrow {
                 let style = if last_busy {
-                    Style::default().fg(BUSY)
+                    Style::default().fg(c.busy)
                 } else if missing {
-                    dim
+                    dimc
                 } else {
                     Style::default()
                 };
                 let head = format!("{n} ");
                 return vec![Line::from(vec![
-                    Span::styled(head.clone(), dim),
-                    Span::styled(clip(&ask, room.saturating_sub(head.width())), style),
+                    Span::styled(head.clone(), dimc),
+                    Span::styled(clip(&ask, room.saturating_sub(head.width()), false), style),
                 ])];
             }
             let mut gone = String::new();
@@ -169,7 +172,7 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
             let mut lines = Vec::new();
             if opened {
                 lines.push(Line::from(vec![
-                    Span::styled(meta.clone(), dim),
+                    Span::styled(meta.clone(), faint),
                     Span::styled(format!(" {}", t("你说的：")), Style::default().add_modifier(Modifier::BOLD)),
                 ]));
                 for l in wrap(st.prompt.trim(), room.saturating_sub(4).max(10)) {
@@ -177,14 +180,14 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
                 }
             } else {
                 let rest = room.saturating_sub(meta.width() + 1);
-                let ask_style = if missing { dim } else { Style::default() };
+                let ask_style = if missing { faint } else { Style::default() };
                 lines.push(Line::from(vec![
-                    Span::styled(meta, dim),
+                    Span::styled(meta, faint),
                     Span::raw(" "),
-                    Span::styled(clip(&ask, rest), ask_style),
+                    Span::styled(clip(&ask, rest, true), ask_style),
                 ]));
             }
-            lines.push(Line::from(Span::styled(clip(&format!("   {reply}"), room), dim)));
+            lines.push(Line::from(Span::styled(clip(&format!("   {reply}"), room, true), faint)));
             lines
         }
     }
@@ -207,67 +210,82 @@ pub fn bottom_offset(v: &View, items: &[Item], room: usize, rows: usize) -> usiz
     0
 }
 
-/// 画一帧；返回列表区里每一行对应的项（点击按它认）和露出来的范围 (第一项, 最后一项)。
-pub fn draw(f: &mut Frame, v: &View, offset: usize) -> (Vec<(u16, Item)>, Option<(usize, usize)>) {
+pub fn to_line(l: &SLine) -> Line<'static> {
+    Line::from(
+        l.iter()
+            .map(|(s, c)| Span::styled(s.clone(), c.map_or_else(Style::default, |c| Style::default().fg(c))))
+            .collect::<Vec<_>>(),
+    )
+}
+
+pub struct Drawn {
+    pub hits: Vec<(u16, Item)>, // 列表区里每一行对应的项
+    pub list_top: u16,          // 列表从第几行开始
+}
+
+/// 画一帧：表头（左边留 2 列，和列表的指针那一列对齐）、整行的分隔线、列表。
+pub fn draw(f: &mut Frame, header: &[SLine], v: &View, offset: usize) -> Drawn {
+    let c = colors();
     let area = f.area();
     let room = area.width.saturating_sub(2) as usize;
-    let grey = Style::default().fg(GREY);
-    let head = if !v.found {
-        t("这个窗格里没找到 Claude 会话")
-    } else if v.gone() > 0 {
-        t("{gone} 轮已压缩 · 当前 {n} 轮")
-            .replace("{gone}", &v.gone().to_string())
-            .replace("{n}", &(v.stops.len() - v.gone()).to_string())
-    } else {
-        t("{n} 轮").replace("{n}", &v.stops.len().to_string())
-    };
-    let head = match v.flash {
-        Some(msg) => format!("{head} · {msg}"),
-        None => head,
-    };
-    let header = vec![
-        Line::from(Span::styled(clip(&head, room), grey)),
-        Line::from(Span::styled("─".repeat(area.width as usize), Style::default().fg(DIM))),
-    ];
+    let head_h = (header.len() as u16).min(area.height);
+    let head: Vec<Line> = header.iter().map(to_line).collect();
     f.render_widget(
-        Paragraph::new(header),
+        Paragraph::new(head),
         Rect {
             x: area.x + 2,
             y: area.y,
             width: area.width.saturating_sub(2),
-            height: 2.min(area.height),
+            height: head_h,
         },
     );
-
-    let top = area.y + 2;
-    let rows = area.height.saturating_sub(2) as usize;
+    let sep_y = area.y + head_h;
+    if sep_y < area.y + area.height {
+        let sep = Line::from(Span::styled("─".repeat(area.width as usize), Style::default().fg(c.dim)));
+        f.render_widget(
+            Paragraph::new(sep),
+            Rect {
+                x: area.x,
+                y: sep_y,
+                width: area.width,
+                height: 1,
+            },
+        );
+    }
+    let top = sep_y + 1;
+    let rows = (area.y + area.height).saturating_sub(top) as usize;
     let items = v.items();
     let mut hits = Vec::new();
     let mut lines: Vec<Line> = Vec::new();
-    let (mut first, mut last) = (None, None);
     for &it in items.iter().skip(offset) {
-        let body = render_item(v, it, room);
-        let selected = matches!(it, Item::Stop(i) if v.opened == Some(v.stops[i].id.as_str()));
         let start = lines.len();
         if start >= rows {
             break;
         }
-        for l in body {
-            let mut spans = vec![Span::styled(if selected { "▌ " } else { "  " }, Style::default().fg(ACCENT))];
+        let selected = matches!(it, Item::Stop(i) if v.opened == Some(v.stops[i].id.as_str()));
+        let bg = if selected {
+            c.selection.map_or_else(Style::default, |b| Style::default().bg(b))
+        } else {
+            Style::default()
+        };
+        for l in render_item(v, it, room) {
+            let mut spans = vec![Span::styled(if selected { "▌ " } else { "  " }, Style::default().fg(c.accent))];
             spans.extend(l.spans);
-            lines.push(Line::from(spans));
+            let used: usize = spans.iter().map(|s| s.content.width()).sum();
+            if selected && used < area.width as usize {
+                spans.push(Span::raw(" ".repeat(area.width as usize - used))); // 选中行整行铺上底色
+            }
+            lines.push(Line::from(spans).patch_style(bg));
         }
         if !v.narrow {
             lines.push(Line::from(Span::styled(
                 format!("  {}", "┈".repeat(room)),
-                Style::default().fg(DIM),
+                Style::default().fg(c.dim),
             )));
         }
         for r in start..lines.len().min(rows) {
             hits.push((top + r as u16, it));
         }
-        first.get_or_insert(it);
-        last = Some(it);
     }
     lines.truncate(rows);
     f.render_widget(
@@ -279,6 +297,5 @@ pub fn draw(f: &mut Frame, v: &View, offset: usize) -> (Vec<(u16, Item)>, Option
             height: rows as u16,
         },
     );
-    let pos = |it: Item| items.iter().position(|&x| x == it).unwrap_or(0);
-    (hits, first.zip(last).map(|(a, b)| (pos(a), pos(b))))
+    Drawn { hits, list_top: top }
 }

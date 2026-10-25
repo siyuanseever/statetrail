@@ -2,10 +2,13 @@
 //! 子命令和 Python 版 trail.py 一一对应：pane（轨迹窗格本身）、toggle（插件动作）、auto（事件钩子：默认打开）。
 
 mod claude;
+mod header;
 mod herdr;
 mod i18n;
 mod jump;
 mod pane;
+mod render;
+mod theme;
 mod transcript;
 mod ui;
 
@@ -58,6 +61,8 @@ pub struct Config {
     pub narrow_default: bool,
     pub width: f64,
     pub lang: String,
+    pub icons: String,    // "auto"（装了 Nerd Font 就用它的图标）/ "nerd" / "unicode" / "text"
+    pub live_usage: bool, // 实时查额度（读 Claude Code 存在钥匙串里的令牌）；false 只读缓存
 }
 
 pub fn config() -> Config {
@@ -73,6 +78,13 @@ pub fn config() -> Config {
             .and_then(toml::Value::as_float)
             .map_or(0.25, |w| w.clamp(0.1, 0.9)),
         lang: table.get("lang").and_then(toml::Value::as_str).unwrap_or("").to_owned(),
+        icons: table
+            .get("icons")
+            .and_then(toml::Value::as_str)
+            .filter(|v| ["auto", "nerd", "unicode", "text"].contains(v))
+            .unwrap_or("auto")
+            .to_owned(),
+        live_usage: table.get("live_usage").and_then(toml::Value::as_bool).unwrap_or(true),
     }
 }
 
@@ -237,10 +249,48 @@ fn cmd_toggle(cfg: &Config) {
 fn main() {
     let cfg = config();
     i18n::init(&cfg.lang);
+    header::init_icons(&cfg.icons);
     match std::env::args().nth(1).as_deref() {
         Some("pane") => pane::run(cfg),
         Some("auto") => cmd_auto(&cfg),
         Some("toggle") => cmd_toggle(&cfg),
+        // 开发用：按 ⟳ 的规矩查一次额度（statetrail refresh-usage <配置目录> [force]）
+        Some("refresh-usage") => {
+            let dir = std::env::args()
+                .nth(2)
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(claude::default_cfg);
+            claude::refresh_usage(&dir, std::env::args().nth(3).as_deref() == Some("force"));
+        }
+        // 开发用：按 Python 版 golden 基准的条件画表头（不带颜色），和 Python 版对比
+        // statetrail dump-header <对话记录> <配置目录> <wide|narrow> <宽度>
+        Some("dump-header") => {
+            let a: Vec<String> = std::env::args().collect();
+            let path = std::path::Path::new(&a[2]);
+            let cfg_dir = std::path::PathBuf::from(&a[3]);
+            let mut tr = transcript::Transcript::new(path);
+            tr.update();
+            let stops = tr.visible();
+            let (model, ctx) = claude::model_ctx(path);
+            let usage = claude::read_usage(&cfg_dir, None, cfg.live_usage);
+            let info = header::Info {
+                cfg_dir: &cfg_dir,
+                model: &model,
+                ctx: &ctx,
+                usage: usage.as_ref(),
+                found: true,
+                turns: stops.len(),
+                gone: stops.iter().filter(|x| x.compacted).count(),
+                flash: None,
+            };
+            let width: usize = a[5].parse().unwrap_or(40);
+            let lines = if a[4] == "narrow" {
+                header::narrow(width, &info)
+            } else {
+                header::wide(width, &info).0
+            };
+            println!("{}", header::plain_lines(&lines));
+        }
         // 开发用：把一份对话记录切出来的轮次一行一个 JSON 打出来，和 Python 版对比
         Some("dump") => {
             let mut tr = transcript::Transcript::new(std::path::Path::new(&std::env::args().nth(2).unwrap_or_default()));

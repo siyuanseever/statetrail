@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
+use crate::header;
 use crate::i18n::t;
 use crate::jump::{self, Outcome, Term};
 use crate::transcript::Transcript;
@@ -33,6 +34,7 @@ enum Msg {
     Command(String),
     Flash(String, Duration),
     Jumped(String, String), // (轮次 id, 结果)
+    Wake,                   // 后台查完额度了：重画
 }
 
 fn sock_of(pane: &str) -> PathBuf {
@@ -94,6 +96,10 @@ struct Trail {
     jump_token: Arc<AtomicUsize>,
     last_wide: Option<i64>,
     hits: Vec<(u16, Item)>,
+    header_len: u16,
+    head_ln: usize,                      // 宽版「N 轮」那一行（点它什么都不做）
+    mc: (Option<u64>, (String, String)), // (对话记录大小, (模型, 上下文))：没变就不重读尾巴
+    last_kick: Option<Instant>,
 }
 
 impl Trail {
@@ -132,6 +138,70 @@ impl Trail {
             tr.update();
         }
         true
+    }
+
+    fn model_ctx(&mut self) -> (String, String) {
+        let Some(tr) = &self.tr else {
+            return (String::new(), String::new());
+        };
+        let size = std::fs::metadata(&tr.path).map(|m| m.len()).ok();
+        if size != self.mc.0 {
+            self.mc = (size, claude::model_ctx(&tr.path));
+        }
+        self.mc.1.clone()
+    }
+
+    /// （live_usage 打开时）额度旧了（默认 30 分钟）就在后台线程里去查一次；claude::refresh_usage 自己还会再节流一道，
+    /// 所有轨迹共用（同一个账号用文件锁串起来），这里多叫一次也不会多发请求。
+    fn kick_usage(&mut self, force: bool, tx: &Sender<Msg>) {
+        if !self.cfg.live_usage {
+            if force {
+                self.say(
+                    t("额度来自 Claude Code 的缓存；要实时查询，在配置里设 live_usage = true"),
+                    Duration::from_secs(8),
+                );
+            }
+            return;
+        }
+        if !force && (!claude::usage_stale(&self.cfg_dir) || self.last_kick.is_some_and(|k| k.elapsed() < Duration::from_secs(60))) {
+            return;
+        }
+        self.last_kick = Some(Instant::now());
+        let (cfg, tx) = (self.cfg_dir.clone(), tx.clone());
+        std::thread::spawn(move || {
+            claude::refresh_usage(&cfg, force);
+            let _ = tx.send(Msg::Wake); // 查完了：表头跟上
+        });
+    }
+
+    fn act(&mut self, act: &str, width: u16, tx: &Sender<Msg>) {
+        match act {
+            "usage" => self.kick_usage(true, tx),
+            "bottom" => {
+                self.jump_token.fetch_add(1, Ordering::SeqCst);
+                HerdrTerm {
+                    pane: self.target.clone(),
+                    height: 0,
+                }
+                .send(&["C-End"]);
+                self.follow = true;
+            }
+            "narrow" | "wide" => self.toggle(width),
+            _ => {}
+        }
+    }
+
+    /// 点表头：第 1 行是按钮；宽版「N 轮」那一行什么都不做；模型、柱子那几行点了去查一次真实额度。
+    fn header_click(&mut self, ln: usize, col: usize, width: u16, tx: &Sender<Msg>) {
+        let narrow = width < WIDE_MIN;
+        if ln == 1 {
+            let buttons = if narrow { header::narrow_buttons() } else { header::wide_buttons() };
+            if let Some(a) = header::button_at(&buttons, col) {
+                self.act(a, width, tx);
+            }
+        } else if narrow || ln != self.head_ln {
+            self.kick_usage(true, tx);
+        }
     }
 
     fn widths(&self) -> Option<(i64, i64)> {
@@ -300,7 +370,27 @@ fn spawn_threads(tx: &Sender<Msg>, target: &str, me: &str) {
     }
 }
 
+/// 画第一帧之前等一下（大小已经对上就不等，最多 0.4 秒）。herdr 在窗格第一次输出之后才把终端调到布局里的大小，
+/// 而程序起来后 0.3 秒内就输出的话，这一下会丢，终端一直比边框里少 1 列（实测：不等 3 次都停在 41 列；
+/// 推迟 0.3 秒以上，第一帧按 41 画、紧接着就收到改成 42 的信号，10 次都是）。Python 版起得慢，碰不到。
+fn wait_for_size(me: &str) {
+    let deadline = Instant::now() + Duration::from_millis(400);
+    while Instant::now() < deadline {
+        let want = herdr::call("pane.layout", json!({"pane_id": me})).ok().and_then(|r| {
+            let rect = r["layout"]["panes"].as_array()?.iter().find(|p| p["pane_id"] == me)?["rect"].clone();
+            Some(((rect["width"].as_i64()? - FRAME) as u16, (rect["height"].as_i64()? - FRAME) as u16))
+        });
+        if want.is_some_and(|w| terminal::size().is_ok_and(|s| s == w)) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 pub fn run(cfg: Config) {
+    // 先让 crossterm 装上窗口大小变化的信号处理：herdr 开出窗格后紧接着调宽度，程序起得快的话那个信号会在
+    // 开始读事件之前就来，漏掉了就一直按开出来时的大小画（实测少 1 列）
+    let _ = event::poll(Duration::ZERO);
     let (Ok(target), Ok(me)) = (std::env::var("STATETRAIL_TARGET"), std::env::var("HERDR_PANE_ID")) else {
         eprintln!("statetrail pane: STATETRAIL_TARGET / HERDR_PANE_ID not set");
         std::process::exit(2);
@@ -323,6 +413,10 @@ pub fn run(cfg: Config) {
         jump_token: Arc::new(AtomicUsize::new(0)),
         last_wide: None,
         hits: Vec::new(),
+        header_len: 0,
+        head_ln: 0,
+        mc: (None, (String::new(), String::new())),
+        last_kick: None,
     };
     s.save_reg();
     // 右键固定交给 herdr 的菜单：轨迹自己不用右键
@@ -330,7 +424,9 @@ pub fn run(cfg: Config) {
     let (tx, rx) = mpsc::channel();
     spawn_threads(&tx, &target, &me);
     s.refresh();
+    s.kick_usage(false, &tx);
 
+    wait_for_size(&me);
     let mut out = std::io::stdout();
     let _ = terminal::enable_raw_mode();
     let _ = execute!(out, terminal::EnterAlternateScreen, event::EnableMouseCapture);
@@ -350,41 +446,77 @@ fn run_loop(
     tx: &Sender<Msg>,
     rx: &Receiver<Msg>,
 ) -> std::io::Result<()> {
-    let mut due: Vec<Instant> = Vec::new(); // 预约的补刷时间
+    // 预约的补刷时间。刚起来的头两秒多看几次窗口大小：herdr 调宽度的信号可能在装好处理之前就来了
+    let start = Instant::now();
+    let mut due: Vec<Instant> = [200, 1000, 2000].iter().map(|ms| start + Duration::from_millis(*ms)).collect();
     let mut next_tick = Instant::now() + TICK;
     let mut next_check = Instant::now() + AGENT_CHECK;
     loop {
         // 画一帧
         let size = term.size()?;
+        if std::env::var_os("STATETRAIL_DEBUG").is_some() {
+            let os = crossterm::terminal::size().unwrap_or((0, 0));
+            let line = format!(
+                "{} term.size={}x{} crossterm={}x{}\n",
+                chrono::Local::now().format("%T%.3f"),
+                size.width,
+                size.height,
+                os.0,
+                os.1
+            );
+            let _ = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(crate::state_dir().join("debug.log"))
+                .and_then(|mut f| f.write_all(line.as_bytes()));
+        }
         let narrow = size.width < WIDE_MIN;
         if s.flash.as_ref().is_some_and(|(_, until)| Instant::now() >= *until) {
             s.flash = None;
         }
         {
-            let empty = Vec::new();
+            let (model, ctx) = s.model_ctx();
+            let usage = claude::read_usage(&s.cfg_dir, s.sid.as_deref(), s.cfg.live_usage);
             let stops = s.tr.as_ref().map(|t| t.visible()).unwrap_or_default();
-            let stops = if s.tr.is_some() { &stops } else { &empty };
+            let info = header::Info {
+                cfg_dir: &s.cfg_dir,
+                model: &model,
+                ctx: &ctx,
+                usage: usage.as_ref(),
+                found: s.tr.is_some(),
+                turns: stops.len(),
+                gone: stops.iter().filter(|x| x.compacted).count(),
+                flash: s.flash.as_ref().map(|(m, _)| m.as_str()),
+            };
+            let head = if narrow {
+                header::narrow(size.width as usize, &info)
+            } else {
+                let (lines, head_ln) = header::wide(size.width as usize, &info);
+                s.head_ln = head_ln;
+                lines
+            };
             let view = ui::View {
-                stops,
+                stops: &stops,
                 narrow,
                 expanded: s.expanded,
                 opened: s.opened.as_deref(),
                 busy: s.busy(),
                 missing: &s.missing,
-                flash: s.flash.as_ref().map(|(m, _)| m.as_str()),
-                found: s.tr.is_some(),
             };
             let items = view.items();
             let room = size.width.saturating_sub(2) as usize;
-            let rows = size.height.saturating_sub(2) as usize;
+            let rows = (size.height as usize).saturating_sub(head.len() + 1);
             let bottom = ui::bottom_offset(&view, &items, room, rows);
             if s.follow {
                 s.offset = bottom;
             }
             s.offset = s.offset.min(bottom);
-            let mut hits = Vec::new();
-            term.draw(|f| hits = ui::draw(f, &view, s.offset).0)?;
-            s.hits = hits;
+            let mut drawn = None;
+            term.draw(|f| drawn = Some(ui::draw(f, &head, &view, s.offset)))?;
+            if let Some(d) = drawn {
+                s.hits = d.hits;
+                s.header_len = d.list_top.saturating_sub(1);
+            }
         }
 
         // 等下一件事
@@ -399,7 +531,24 @@ fn run_loop(
         let msg = rx.recv_timeout(wake.saturating_duration_since(now));
         let mut stale = false;
         match msg {
-            Ok(Msg::Input(Event::Mouse(m))) => match m.kind {
+            Ok(Msg::Input(Event::Mouse(m))) => match {
+                if std::env::var_os("STATETRAIL_DEBUG").is_some() && !matches!(m.kind, MouseEventKind::Moved) {
+                    let line = format!(
+                        "{} mouse {:?} row={} col={} header_len={}\n",
+                        chrono::Local::now().format("%T%.3f"),
+                        m.kind,
+                        m.row,
+                        m.column,
+                        s.header_len
+                    );
+                    let _ = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(crate::state_dir().join("debug.log"))
+                        .and_then(|mut f| f.write_all(line.as_bytes()));
+                }
+                m.kind
+            } {
                 MouseEventKind::ScrollUp => {
                     s.offset = s.offset.saturating_sub(WHEEL);
                     s.follow = false;
@@ -411,6 +560,10 @@ fn run_loop(
                     if s.offset >= tr_len {
                         s.follow = true;
                     }
+                }
+                MouseEventKind::Down(MouseButton::Left) if m.row < s.header_len => {
+                    // 表头的字从第 3 列开始（左边 2 列和列表的指针对齐）；列号从 1 数
+                    s.header_click(m.row as usize + 1, (m.column as usize).saturating_sub(1), size.width, tx);
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
                     if let Some(&(_, it)) = s.hits.iter().find(|(row, _)| *row == m.row) {
@@ -449,6 +602,7 @@ fn run_loop(
                 }
             }
             Ok(Msg::Flash(m, d)) => s.say(m, d),
+            Ok(Msg::Wake) => {}
             Ok(Msg::Jumped(ids, how)) => {
                 for id in ids.split(',') {
                     if how == "found" {
@@ -465,6 +619,7 @@ fn run_loop(
         if now >= next_tick {
             next_tick = now + TICK;
             stale = true;
+            s.kick_usage(false, tx); // 没有事件时醒来：额度旧了就去查（默认 30 分钟）
         }
         if now >= next_check {
             next_check = now + AGENT_CHECK;
