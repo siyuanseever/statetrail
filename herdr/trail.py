@@ -68,7 +68,9 @@ DEFAULTS = {
     # 点开它、语音说进去，用完 exit 或再点一次按钮就关。它不跟着「点外面就关」：跑到一半的 ssh 不能因为你点了一下 Claude 就没了
     # height：这个工具占 Claude 那一格高度的比例，不写就按 tool_height。Git、文件要看的东西多，一半不够（用户 2026-10-25 说的），
     # 给到 herdr 允许的最大 0.9：Claude 只剩上面一小条，旁边的轨迹照样能点、能再点一次按钮关掉。命令行一半就够
-    "buttons": [{"label": "Git", "command": "lazygit", "icon": "git", "height": 0.9},
+    # pick_repo：Claude 的目录不在 git 仓库里（比如 ~/projects）时，先列出下面一两层的仓库让你点一个，再开 lazygit；
+    # 不然 lazygit 只会问要不要在这里新建一个仓库（它自己不会去找子目录里的仓库）
+    "buttons": [{"label": "Git", "command": "lazygit", "icon": "git", "height": 0.9, "pick_repo": True},
                 {"label": "文件", "command": "yazi", "icon": "files", "height": 0.9},
                 {"label": "命令行", "command": "$SHELL", "icon": "shell", "close_on_blur": False}],
     # 按钮开的工具从 Claude 下面切出来（Claude 宽度不变，只是变矮；轨迹一直露在旁边能点），占 Claude 那一格高度的比例
@@ -389,6 +391,36 @@ def live_dir(path):
     return path or str(Path.home())
 
 
+def git_root(path):
+    """path 所在的 git 仓库的根；不在仓库里就是 None。"""
+    try:
+        r = subprocess.run(["git", "-C", path, "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def find_repos(path, depth=2):
+    """path 下面一到 depth 层里的 git 仓库（有 .git 的目录，worktree 的 .git 是文件也算），按名字排。
+    隐藏目录、node_modules 不进；找到仓库就不再往它里面找。"""
+    out = []
+
+    def walk(d, left):
+        try:
+            entries = sorted(os.scandir(d), key=lambda e: e.name.lower())
+        except OSError:
+            return
+        for e in entries:
+            if e.name.startswith(".") or e.name == "node_modules" or not e.is_dir(follow_symlinks=False):
+                continue
+            if os.path.exists(os.path.join(e.path, ".git")):
+                out.append(e.path)
+            elif left > 1:
+                walk(e.path, left - 1)
+    walk(path, depth)
+    return out
+
+
 def lead(line, tag, slot):
     """把 tag 左对齐放在 line 前面，占 slot 列：tag 短了、或者翻到头没有 tag 时补空格，后面的字和按钮就不会跟着
     左右挪（用户要 ▲ / ▼ 靠左，和左边的进度条对齐）。slot 为 0（一屏放得下，不用翻）就原样返回。"""
@@ -488,6 +520,7 @@ class Sidebar:
         self.reg, self.fifo = base.with_suffix(".json"), base.with_suffix(".fifo")
         self.sock, self.rows_file = base.with_suffix(".sock"), base.with_suffix(".rows")
         self.menu_file = base.with_suffix(".menu")
+        self.repos_file = base.with_suffix(".repos")
         self.sid = self.path = self.tr = None
         self.cfg_dir, self.status = claude.DEFAULT_CFG, None
         self.opened, self.expanded = None, False
@@ -941,6 +974,17 @@ class Sidebar:
             home = str(Path.home())
             short = "~" + cwd[len(home):] if cwd == home or cwd.startswith(home + "/") else cwd
             self.say(_t("Claude 的目录已经不在了，改在 {d} 打开").format(d=short), 8)
+        if button.get("pick_repo") and prog == "lazygit" and cwd and not git_root(cwd):
+            # 不在仓库里：下面只有一个仓库就直接开它，好几个就先让你点一个（trail.py pickrepo），一个都没有就只提示
+            repos = find_repos(cwd)
+            if not repos:
+                self.say(_t("这里没有 Git 仓库"))
+                return
+            if len(repos) == 1:
+                cmd = f"exec lazygit -p {shlex.quote(repos[0])}"
+            else:
+                self.repos_file.write_text("\n".join(repos) + "\n")
+                cmd = f"exec python3 {shlex.quote(str(HERE / 'trail.py'))} pickrepo {shlex.quote(str(self.repos_file))}"
         env = {"STATETRAIL_CWD": cwd, "STATETRAIL_CMD": cmd, "PATH": os.environ.get("PATH", ""), "SHELL": shell}
         if prog == "lazygit":                 # 在最外层按 Esc 也退出，和 yazi 一样（叠加在你自己的配置后面）
             mine = Path(sh_out("lazygit", "--print-config-dir").strip() or "/nonexistent") / "config.yml"
@@ -1306,7 +1350,8 @@ class Sidebar:
             self.close_tool(focus=False)
             # 原地重启时登记留着：换代码那零点几秒里，别让自动打开以为这里没有轨迹、再开一个
             for p in ((self.reg,) if not self.restart else ()) + (self.fifo, self.sock, self.rows_file,
-                                                                   self.rows_file.with_suffix(".tmp"), self.menu_file):
+                                                                   self.rows_file.with_suffix(".tmp"), self.menu_file,
+                                                                   self.repos_file):
                 p.unlink(missing_ok=True)
             self.stop_fzf()
             sub.close()
@@ -1503,7 +1548,38 @@ def cmd_menu():
             f.write(f"plugrun {pick[0]} {pick[1]}\n")
 
 
-COMMANDS = {"toggle": cmd_toggle, "pane": cmd_pane, "auto": cmd_auto, "menu": cmd_menu}
+def cmd_pickrepo():
+    """Git 按钮在不是仓库的目录里：一行一个仓库（名字、当前分支，有没提交的改动就加个 ●），点一下或回车就用 lazygit
+    打开它，Esc 退出。扁平的一列，不画树、不画框（用户要的，不要 VS Code 那种展开树）。"""
+    repos = [ln for ln in open(sys.argv[2]).read().split("\n") if ln] if len(sys.argv) > 2 else []
+    if not repos:
+        return
+    from concurrent.futures import ThreadPoolExecutor
+
+    def info(r):
+        def git(*a):
+            try:
+                return subprocess.run(["git", "-C", r, *a], capture_output=True, text=True, timeout=3).stdout.strip()
+            except (OSError, subprocess.TimeoutExpired):
+                return ""
+        return git("branch", "--show-current") or git("rev-parse", "--short", "HEAD"), bool(git("status", "--porcelain"))
+    with ThreadPoolExecutor(8) as pool:
+        infos = list(pool.map(info, repos))
+    base = os.getcwd()
+    names = [os.path.relpath(r, base) for r in repos]
+    w = max(R.cols(n) for n in names)
+    rows = [f"{r}\t{n}{' ' * (w - R.cols(n))}  {R.GREY}{b}{R.RESET}{'  ' + R.WARN_C + '●' + R.RESET if d else ''}"
+            for r, n, (b, d) in zip(repos, names, infos)]
+    r = subprocess.run(["fzf", "--ansi", "--no-input", "--no-sort", "--layout=reverse", "--delimiter=\t", "--with-nth=2",
+                        "--info=hidden", "--pointer=▌", "--no-scrollbar", "--header", _t("选一个仓库，Esc 退出"),
+                        "--bind", "left-click:accept", f"--color={FZF_COLORS}"],
+                       input="\n".join(rows) + "\n", stdout=subprocess.PIPE, text=True)
+    pick = r.stdout.split("\t")[0].strip()
+    if r.returncode == 0 and pick:
+        os.execvp("lazygit", ["lazygit", "-p", pick])
+
+
+COMMANDS = {"toggle": cmd_toggle, "pane": cmd_pane, "auto": cmd_auto, "menu": cmd_menu, "pickrepo": cmd_pickrepo}
 
 if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:

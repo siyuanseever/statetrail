@@ -37,7 +37,10 @@ statetrail is for the session you are in: it stays beside the live Claude and fo
   height back and the focus. Clicking another button swaps the tool, so only one is open at a time. The third default
   button, `›_`, is a shell for the commands Claude can't run for you (`sudo` asking for a password,
   `gcloud auth login` in a browser, an interactive `ssh`): it starts in Claude's directory and stays open when you
-  click elsewhere.
+  click elsewhere. If Claude's directory isn't inside a git repository (say `~/projects`), Git first lists the
+  repositories one or two levels down, one per row with its branch and a `●` if it has uncommitted changes; click one
+  to open lazygit there, `Esc` to leave. With a single repository below it opens that one directly; with none it just
+  says so instead of letting lazygit offer to create one.
 - **Your other herdr plugins, one click away.** After your own buttons and a `│`, the bottom row lists the other
   herdr plugins you have installed and enabled, one icon each, no text (on a second row in the narrow view). herdr
   plugins don't declare icons, so statetrail ships them for the ones it knows (herdr-sidebar `▥`, herdr-file-viewer
@@ -101,6 +104,7 @@ label = "Git"
 command = "lazygit"       # opens below Claude, in Claude's working directory (through sh -c)
 icon = "git"              # an icon name (git, files) or any single glyph
 height = 0.9              # share of the Claude pane's height; 0.9 is the most herdr allows
+pick_repo = true          # not in a repository: pick one of the repositories below first
 
 [[buttons]]
 label = "Files"

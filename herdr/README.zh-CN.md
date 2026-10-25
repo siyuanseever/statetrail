@@ -30,7 +30,9 @@ statetrail 管的是你正在用的这个会话：贴在运行中的 Claude 旁�
   关掉它：再点一次同一个按钮、在工具里退出（lazygit 和 yazi 按 `q`，lazygit 按 `Esc` 也行，命令行输入 `exit`），
   Git 和文件点外面任何地方也会关。关掉后 Claude 恢复原来的高度、拿回焦点。开着一个时点另一个按钮就换过去，同时只开一个。
   第三个默认按钮 `›_` 是命令行，放 Claude 替你跑不了的命令（要输密码的 `sudo`、要在浏览器里登录的 `gcloud auth login`、
-  交互式的 `ssh`）：起始目录是 Claude 的，点别处不关。
+  交互式的 `ssh`）：起始目录是 Claude 的，点别处不关。Claude 的目录不在 git 仓库里时（比如 `~/projects`），点 Git 先列出
+  下面一两层里的仓库，一行一个，后面是当前分支，有没提交的改动就加个 `●`；点一个就在那里开 lazygit，`Esc` 退出。下面只有一个
+  仓库就直接开它；一个都没有就只提示一句，不让 lazygit 问你要不要在这里新建仓库。
 - **装了的其他 herdr 插件，一点就开。** 底部在自己的按钮后面用 `│` 隔开，自动列出你装了、开着的其他 herdr 插件，
   每个一个图标，不写字（窄版放在第二行）。herdr 插件自己不带图标，认识的几个由 statetrail 配好（herdr-sidebar `▥`、herdr-file-viewer `▭`、
   zoetrope `⋔`，有 Nerd Font 时用它的图标）；不认识的插件不上第一层，在 `⋯` 里按名字列出，配置里给它写个 `icon` 就会上来。按钮运行这个插件在这台机器上能用的
@@ -88,6 +90,7 @@ label = "Git"
 command = "lazygit"       # 开在 Claude 下面，目录是 Claude 那一格的（经 sh -c）
 icon = "git"              # 图标名（git、files）或者直接写一个字形
 height = 0.9              # 占 Claude 那一格高度的比例，0.9 是 herdr 允许的最大值
+pick_repo = true          # 不在仓库里时，先在下面的仓库里选一个
 
 [[buttons]]
 label = "文件"
