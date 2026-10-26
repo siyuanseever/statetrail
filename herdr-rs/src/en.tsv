@@ -56,3 +56,31 @@ Claude 的目录已经不在了，改在 {d} 打开	Claude's directory is gone; 
 选一个仓库，Esc 退出	pick a repository, Esc to leave
 监视器	Monitor
 找不到 {p}，可以用 brew install {p} 装上	{p} not found; install it with brew install {p}
+
+# 换账号（statetrail switch），从 tmux 版 lib/en.tsv 拷来
+{pane} 退出	{pane} exiting
+【切账号】要把这个会话换到另一个账号，得先收队：请让 {names} 把手上的结果交回来，然后把它们全部关掉。全部关掉后就停下，别的什么都不用做。	[Account switch] To move this session to another account, the team has to be wound down first: have {names} hand back their results, then shut them all down. Once they are all shut down, stop; nothing else is needed.
+不是交互式会话（队友/后台），没动	not an interactive session (teammate/background); left alone
+切换中…	switching…
+它挂着后台任务/定时任务，切换会把它们停掉，没动	it has background/scheduled tasks that switching would stop; left alone
+它有后台任务，退出会停掉它们，已取消退出，没动	it has background tasks that exiting would stop; exit cancelled, left alone
+它没有退出（可能刚好开始工作），没再动	it did not exit (it may have just started working); stopped
+已切到 {to}，接着原会话	switched to {to}, same session
+已执行 {what}，但 30 秒内没看到它在 {to} 下起来，请看一眼窗格	ran {what}, but it did not come up under {to} within 30 s; check the pane
+已经是 {to}	already on {to}
+已让领队收队，{m} 分钟内队友没退完（还剩 {names}），没再动	asked the lead to wind down, but teammates did not all exit within {m} min ({names} left); stopped
+收过一次队了，窗口里还有队友，没再动	already wound down once, but teammates are still here; stopped
+正在工作或等你确认，没动	busy or waiting for your confirmation; left alone
+没有要切的窗格	No pane to switch
+窗格里没找到交互式 claude 进程	no interactive claude process in this pane
+窗格里没有 shell，没法原地重启，没动	no shell in this pane, cannot restart in place; left alone
+等队友退出（还剩 {n} 个）	waiting for teammates to exit ({n} left)
+认不出输入框，为防丢字没动	input box not recognized; left alone so no typing is lost
+让领队收队（{n} 个队友）	asking the lead to wind down the team ({n} teammates)
+输入框里有没发出去的字（{d}…），没动	unsent text in the input box ({d}…); left alone
+这是当前正在用的窗格	this is the pane you are using
+队友都退了，但领队一直没停下来，没再动	teammates exited, but the lead never stopped; stopped
+队友都退了，等领队停下来	teammates exited, waiting for the lead to stop
+队友：随领队收队，不单独切	teammate: goes with its lead, not switched on its own
+（演练）会先让领队收队（{names}），收完再退出重启	(dry run) would ask the lead to wind down ({names}), then exit and restart
+（演练）会退出再执行：{line}	(dry run) would exit, then run: {line}
