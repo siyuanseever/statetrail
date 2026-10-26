@@ -202,9 +202,11 @@ pub fn wide(width: usize, i: &Info) -> (Vec<SLine>, usize) {
     }
     let mut lines = vec![buttons_line(&wide_buttons(), i.usage, true)];
     let acct = claude::current_account(i.cfg_dir);
+    // 模型名和「/high」各是一个按钮，中间空一格分开（Opus 5.5 /high）
+    let model = i.model.replacen('/', " /", 1);
     lines.extend(render::status_lines(
         width,
-        i.model,
+        &model,
         i.ctx,
         i.usage,
         &acct,
@@ -233,11 +235,11 @@ pub fn narrow(width: usize, i: &Info) -> Vec<SLine> {
     };
     let mut fields: Vec<(u8, SLine)> = Vec::new();
     if !i.model.is_empty() {
-        // `Opus 5.5/high` → `Opus5.5/hi`：窄版一行只有十来列
+        // `Opus 5.5/high` → `Opus5.5 /hi`：窄版一行只有十来列；两段各是一个按钮，空一格分开
         let (name, effort) = i.model.split_once('/').unwrap_or((i.model, ""));
         let mut short = name.replace(' ', "");
         if !effort.is_empty() {
-            short = format!("{short}/{}", effort.chars().take(2).collect::<String>());
+            short = format!("{short} /{}", effort.chars().take(2).collect::<String>());
         }
         fields.push((2, tagged("model", &short)));
     }
@@ -301,13 +303,34 @@ pub fn hot_spots(lines: &[SLine], model: &str, accts: &[String]) -> Vec<(usize, 
                 let start = p[..b].width();
                 out.push((i, start, start + cand.width(), "model"));
                 let rest = &p[b + cand.len()..];
-                if rest.starts_with('/') {
-                    let eff = rest.split(' ').next().unwrap_or("");
-                    out.push((i, start + cand.width(), start + cand.width() + eff.width(), "effort"));
+                if let Some(eff) = rest.strip_prefix(" /") {
+                    let eff = eff.split(' ').next().unwrap_or("");
+                    let at = start + cand.width() + 1;
+                    out.push((i, at, at + 1 + eff.width(), "effort"));
                 }
                 break;
             }
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn hot_spots_split_model_and_effort() {
+        let l = |s: &str| vec![(s.to_owned(), None)];
+        let lines = vec![l("buttons"), l("Opus 5.5 /high · siyuan.l x"), l("Opus5.5 /hi")];
+        let got = super::hot_spots(&lines, "Opus 5.5/high", &["siyuan.l".into()]);
+        assert_eq!(
+            got,
+            vec![
+                (1, 17, 27, "acct"),
+                (1, 0, 8, "model"),
+                (1, 9, 14, "effort"),
+                (2, 0, 7, "model"),
+                (2, 8, 11, "effort"),
+            ]
+        );
+    }
 }
