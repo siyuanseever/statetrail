@@ -97,6 +97,7 @@ herdr plugin install siyuanseever/statetrail/herdr
 ## 本机从 tmux 迁到 herdr 之后补的（2026-10-26）
 
 - 默认打开窄版（细条，19 列）：用户原话「我们用细条版本作为默认版本吧」。配置 `default_mode = "wide"` 才开宽版；Python 版不动，仍默认宽版。
+- 窄版表头 effort 单独一行（用户原话「effort 单独一行」）：以前是「Opus5.5 hi」挤一行、effort 只留两个字；现在模型名一行、下一行是 effort 全名，和模型名对齐，两段都还能点开下拉菜单。
 
 来自迁移会话留下的交接（`docs/HANDOFF-2026-10-26-herdr.md`，已并进这里、删掉）。本机现在装的就是这个目录：
 `herdr plugin link ~/projects/statetrail/herdr-rs`。link 的目录 `herdr plugin update` 管不到，有新提交要本地

@@ -235,13 +235,14 @@ pub fn narrow(width: usize, i: &Info) -> Vec<SLine> {
     };
     let mut fields: Vec<(u8, SLine)> = Vec::new();
     if !i.model.is_empty() {
-        // `Opus 5.5/high` → `Opus5.5 hi`：窄版一行只有十来列；两段各是一个按钮，空一格分开
+        // `Opus 5.5/high` → 一行 `Opus5.5`、下一行 `high`（和模型名对齐）：两段各是一个按钮，effort 单独一行（用户定的）
         let (name, effort) = i.model.split_once('/').unwrap_or((i.model, ""));
-        let mut short = name.replace(' ', "");
+        let model = tagged("model", &name.replace(' ', ""));
+        let indent = width_of(&model) - name.replace(' ', "").width();
+        fields.push((2, model));
         if !effort.is_empty() {
-            short = format!("{short} {}", effort.chars().take(2).collect::<String>());
+            fields.push((2, vec![(format!("{}{effort}", " ".repeat(indent)), Some(c.grey))]));
         }
-        fields.push((2, tagged("model", &short)));
     }
     let acct = claude::short_account(i.cfg_dir);
     if !acct.is_empty() {
@@ -286,7 +287,8 @@ pub fn plain_lines(lines: &[SLine]) -> String {
 }
 
 /// 表头里能点开下拉菜单的几段字：(第几行，从 0 数, 列起, 列止, 哪种)。列按显示宽度、从表头文字的第一列算起。
-/// 模型名 → "model"，后面隔一格的「high」→ "effort"，账号名到行尾（连 ⇄）→ "acct"。宽版、窄版都按字找（窄版的模型名去了空格、effort 只留两个字）。
+/// 模型名 → "model"，后面隔一格的「high」→ "effort"，账号名到行尾（连 ⇄）→ "acct"。宽版、窄版都按字找
+/// （窄版的模型名去了空格，effort 单独一行：整行去掉空白正好是 effort 就算）。
 pub fn hot_spots(lines: &[SLine], model: &str, accts: &[String]) -> Vec<(usize, usize, usize, &'static str)> {
     let (name, effort) = model.split_once('/').unwrap_or((model, ""));
     let mut out = Vec::new();
@@ -298,14 +300,19 @@ pub fn hot_spots(lines: &[SLine], model: &str, accts: &[String]) -> Vec<(usize, 
         if name.is_empty() {
             continue;
         }
+        if !effort.is_empty() && p.trim() == effort {
+            let at = p.width() - p.trim_start().width();
+            out.push((i, at, at + effort.width(), "effort"));
+            continue;
+        }
         for cand in [name.to_owned(), name.replace(' ', "")] {
             if let Some(b) = p.find(&cand) {
                 let start = p[..b].width();
                 out.push((i, start, start + cand.width(), "model"));
                 let rest = &p[b + cand.len()..];
-                // 认 effort 的全名（宽版）或前两个字（窄版），免得把后面的「·」当成 effort
+                // 只认 effort 的全名，免得把后面的「·」当成 effort
                 let eff = rest.strip_prefix(' ').and_then(|r| r.split(' ').next()).unwrap_or("");
-                if !effort.is_empty() && !eff.is_empty() && effort.starts_with(eff) {
+                if !effort.is_empty() && eff == effort {
                     let at = start + cand.width() + 1;
                     out.push((i, at, at + eff.width(), "effort"));
                 }
@@ -321,7 +328,7 @@ mod tests {
     #[test]
     fn hot_spots_split_model_and_effort() {
         let l = |s: &str| vec![(s.to_owned(), None)];
-        let lines = vec![l("buttons"), l("Opus 5.5 high · siyuan.l x"), l("Opus5.5 hi"), l("Opus 5.5 · siyuan.l")];
+        let lines = vec![l("buttons"), l("Opus 5.5 high · siyuan.l x"), l("✦ Opus5.5"), l("  high"), l("Opus 5.5 · siyuan.l")];
         let got = super::hot_spots(&lines, "Opus 5.5/high", &["siyuan.l".into()]);
         assert_eq!(
             got,
@@ -329,10 +336,10 @@ mod tests {
                 (1, 16, 26, "acct"),
                 (1, 0, 8, "model"),
                 (1, 9, 13, "effort"),
-                (2, 0, 7, "model"),
-                (2, 8, 10, "effort"),
-                (3, 11, 19, "acct"),
-                (3, 0, 8, "model"),
+                (2, 2, 9, "model"),
+                (3, 2, 6, "effort"),
+                (4, 11, 19, "acct"),
+                (4, 0, 8, "model"),
             ]
         );
     }
