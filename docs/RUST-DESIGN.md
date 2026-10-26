@@ -126,6 +126,8 @@ statetrail switch --to <账号> [--dry-run] [--stop-bg] [--json] <窗格>...
   开关）/ 账号的列表。菜单由轨迹自己画：herdr 的 popup 没有位置参数，只能开在**当前看着的那个标签页**正中，不管是谁叫开的。
   模型和 effort 走 `/model` 选择器按 `s`（只改这个会话）：带参数的 `/model sonnet`、`/effort low` 会顺手写进 `settings.json` 当新会话默认，
   数字键也会；对话已缓存时还会问「Switch model?」，自动回车确认。换账号会按原启动参数重起，只改这个会话的模型 / effort 随之失效。
+- 压缩后表头没有模型（2026-10-26 修）：读用量时碰到压缩分界线就返回了，分界线之后 Claude 还没回过话时模型 / effort 是空的。
+  现在用量取分界线上的 `postTokens`，模型 / effort 继续往前找。
 
 ### 底部按钮的工具没装（`41f5dd4`）
 

@@ -205,7 +205,8 @@ struct UsageMsg {
 
 /// 从一段（尾巴上的）行里，倒着找最新一条主线回复的上下文大小 (tokens, model, effort)。
 fn scan_usage(lines: &[&[u8]]) -> (Option<u64>, Option<String>, Option<String>) {
-    let (mut model, mut effort) = (None, None);
+    // 压缩分界线之后 Claude 还没回过话：用量取分界线上的 post，模型 / effort 接着往前找（压缩不换模型）
+    let (mut tokens, mut model, mut effort) = (None, None, None);
     for raw in lines.iter().rev() {
         let Ok(e) = serde_json::from_slice::<UsageLine>(raw) else {
             continue;
@@ -214,9 +215,10 @@ fn scan_usage(lines: &[&[u8]]) -> (Option<u64>, Option<String>, Option<String>) 
             continue;
         }
         if e.kind.as_deref() == Some("system") && e.subtype.as_deref() == Some("compact_boundary") {
-            if let Some(post) = e.compact.and_then(|c| c.post) {
-                return (Some(post), model, effort);
+            if let (None, Some(post)) = (tokens, e.compact.and_then(|c| c.post)) {
+                tokens = Some(post);
             }
+            continue;
         }
         let Some(msg) = e.message else { continue };
         if e.kind.as_deref() != Some("assistant") {
@@ -233,6 +235,9 @@ fn scan_usage(lines: &[&[u8]]) -> (Option<u64>, Option<String>, Option<String>) 
             model = None;
             continue;
         }
+        if tokens.is_some() {
+            return (tokens, model, effort);
+        }
         let n = [
             "input_tokens",
             "cache_creation_input_tokens",
@@ -244,7 +249,7 @@ fn scan_usage(lines: &[&[u8]]) -> (Option<u64>, Option<String>, Option<String>) 
         .sum();
         return (Some(n), model, effort);
     }
-    (None, model, effort)
+    (tokens, model, effort)
 }
 
 /// 先看最后 256 KB，找不到再翻倍，最多 4 MB（每次 Claude 回复都会叫一次，别每次都读 4 MB）。
@@ -260,7 +265,7 @@ fn last_usage(path: &Path) -> (Option<u64>, Option<String>, Option<String>) {
         let _ = f.read_to_end(&mut buf);
         let lines: Vec<&[u8]> = buf.split(|&b| b == b'\n').filter(|l| !l.is_empty()).collect();
         let found = scan_usage(&lines);
-        if found.0.is_some() || span >= TAIL_BYTES || span >= size {
+        if (found.0.is_some() && found.1.is_some()) || span >= TAIL_BYTES || span >= size {
             return found;
         }
         span *= 2;
@@ -640,5 +645,18 @@ mod tests {
         assert_eq!(super::short_model("claude-opus-5-5"), "Opus 5.5");
         assert_eq!(super::short_model("claude-haiku-4-5-20251001"), "Haiku 4.5");
         assert_eq!(super::short_model("claude-sonnet-5-5[1m]"), "Sonnet 5.5");
+    }
+
+    #[test]
+    fn model_survives_compact() {
+        let a = br#"{"type":"assistant","effort":"high","message":{"model":"claude-opus-5-5","usage":{"input_tokens":500000}}}"#;
+        let b = br#"{"type":"system","subtype":"compact_boundary","compactMetadata":{"postTokens":30000}}"#;
+        let u = br#"{"type":"user","message":{"content":"hi"}}"#;
+        let got = super::scan_usage(&[&a[..], &b[..], &u[..]]);
+        assert_eq!(got, (Some(30000), Some("claude-opus-5-5".into()), Some("high".into())));
+        // 分界线之后回过话：用量取那条回复的
+        let c = br#"{"type":"assistant","message":{"model":"claude-sonnet-5-5","usage":{"input_tokens":40000}}}"#;
+        let got = super::scan_usage(&[&a[..], &b[..], &c[..]]);
+        assert_eq!(got, (Some(40000), Some("claude-sonnet-5-5".into()), None));
     }
 }
