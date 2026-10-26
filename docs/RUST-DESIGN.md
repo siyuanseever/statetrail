@@ -57,6 +57,11 @@ statetrail/
   所以由 dotfiles 的 `herdr/status.sh` 来做，不在本仓库里。
 - 本仓库只做一件事：底部第 4 个默认按钮「监视器」，从 Claude 下面打开 btop（高度 0.9），再点一次关掉，在 btop 里按 q 也能退出。
   btop 1.4.6 的默认配置就能只用鼠标结束进程：点进程那一行 → 点 terminate → 点 Yes。所以不另带 btop 配置。
+  2026-10-26 改为自带布局（用户选的）：默认布局开在 Claude 下面那一块（139×50）里，磁盘一列列出同一块盘的 7 个 APFS 分区
+  （root、VM、Preboot、Update……都是「69% 315 GiB」），内存挤成 29 列宽，网络框又占一块，用户说「不容易同时看到 CPU、内存、磁盘」。
+  现在默认的「监视器」按钮（命令正好是 `btop`）第一次用时，把你的 `~/.config/btop/btop.conf` 复制到插件状态目录的 `btop.conf`，
+  只改 `shown_boxes = "cpu mem proc"`、`disks_filter = "/"`，用 `btop -c` 打开它；btop 退出时把设置写回这份，不碰你自己的配置。
+  自定义的 btop 命令不动。
   这个按钮跟第 4 步一起做了（`5fabd10`）。
 
 ## 分发：用户不用装 Rust
