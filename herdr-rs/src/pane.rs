@@ -173,7 +173,7 @@ impl Trail {
         } else if self.no_claude_since.is_none() {
             self.no_claude_since = Some(Instant::now());
         }
-        let sid = herdr::session_id(&info);
+        let sid = herdr::session_id(&self.target, &info);
         if sid != self.sid {
             // /clear、/resume 换了会话
             self.sid = sid;
@@ -1251,6 +1251,10 @@ fn run_loop(
                 return Ok(()); // 插件更新了：收掉界面，原地换成新程序（run 里 exec）
             }
             if s.no_claude_since.is_none() && herdr::pane_info(&s.target).is_none_or(|i| i["agent"].as_str() != Some("claude")) {
+                stale = true;
+            }
+            // 会话 id 后报上来（report-agent-session）、对话记录文件后出现时状态都不变，没有事件：没找到就隔一会儿再查
+            if s.tr.is_none() {
                 stale = true;
             }
             if s.plugins_changed() {

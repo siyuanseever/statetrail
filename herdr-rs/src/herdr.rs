@@ -80,23 +80,43 @@ pub fn pane_info(pane: &str) -> Option<Value> {
         .and_then(|mut v| v.get_mut("pane").map(Value::take))
 }
 
-/// 窗格里前台的 Claude 进程号：Claude Code 的进程名是它的版本号，或者 argv0 是 claude。
+/// Claude Code 的进程名是它的版本号（2.1.310）。
+fn is_version(name: &str) -> bool {
+    name.split('.').count() == 3 && name.split('.').all(|x| !x.is_empty() && x.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// 窗格里的 Claude 进程号。Claude 干活时前台进程组可能是它起的子进程（caffeinate、python），claude 本身不在里面，
+/// 这时去 shell 的直接子进程里找（ps 的 ucomm 是进程名，也就是版本号）。
 pub fn claude_pid(pane: &str) -> Option<u32> {
     let r = call("pane.process_info", json!({"pane_id": pane})).ok()?;
-    for p in r["process_info"]["foreground_processes"].as_array()? {
-        let name = p["name"].as_str().unwrap_or("");
-        let is_version = name.split('.').count() == 3 && name.split('.').all(|x| !x.is_empty() && x.bytes().all(|b| b.is_ascii_digit()));
-        if p["argv0"].as_str() == Some("claude") || is_version {
+    let info = &r["process_info"];
+    for p in info["foreground_processes"].as_array().into_iter().flatten() {
+        if p["argv0"].as_str() == Some("claude") || is_version(p["name"].as_str().unwrap_or("")) {
             return p["pid"].as_u64().map(|x| x as u32);
         }
     }
-    None
+    let shell = info["shell_pid"].as_u64()?.to_string();
+    let out = std::process::Command::new("ps").args(["-A", "-o", "pid=,ppid=,ucomm="]).output().ok()?;
+    String::from_utf8_lossy(&out.stdout).lines().find_map(|ln| {
+        let f: Vec<&str> = ln.split_whitespace().collect();
+        match f.as_slice() {
+            [pid, ppid, name, ..] if *ppid == shell && (is_version(name) || *name == "claude") => pid.parse().ok(),
+            _ => None,
+        }
+    })
 }
 
-/// 这一格是 Claude，就返回它的会话 id。
-pub fn session_id(info: &Value) -> Option<String> {
+/// 这一格是 Claude，就返回它的会话 id。herdr 的 Claude 集成只在 SessionStart 时报会话 id，装集成之前就开着的会话
+/// 没有，这时退回去读 <配置目录>/sessions/<claude 进程号>.json 里的 sessionId。
+pub fn session_id(pane: &str, info: &Value) -> Option<String> {
     if info["agent"].as_str() != Some("claude") {
         return None;
     }
-    info["agent_session"]["value"].as_str().map(str::to_owned)
+    if let Some(sid) = info["agent_session"]["value"].as_str() {
+        return Some(sid.to_owned());
+    }
+    let pid = claude_pid(pane)?;
+    let f = crate::claude::config_dir_of_pid(Some(pid)).join("sessions").join(format!("{pid}.json"));
+    let v: Value = serde_json::from_slice(&std::fs::read(f).ok()?).ok()?;
+    v["sessionId"].as_str().map(str::to_owned)
 }

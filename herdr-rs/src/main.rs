@@ -339,7 +339,7 @@ fn cmd_toggle(cfg: &Config) {
                 return;
             }
         }
-        if herdr::pane_info(&focused).as_ref().and_then(herdr::session_id).is_some() {
+        if herdr::pane_info(&focused).is_some_and(|i| herdr::session_id(&focused, &i).is_some()) {
             let _ = open_sidebar(&focused, cfg);
         }
     });
@@ -363,6 +363,13 @@ fn main() {
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(claude::default_cfg);
             claude::refresh_usage(&dir, std::env::args().nth(3).as_deref() == Some("force"));
+        }
+        // 开发用：这一格的 Claude 进程号、配置目录、会话 id（statetrail session <窗格>）
+        Some("session") => {
+            let pane = std::env::args().nth(2).unwrap_or_default();
+            let pid = herdr::claude_pid(&pane);
+            let sid = herdr::pane_info(&pane).and_then(|i| herdr::session_id(&pane, &i));
+            println!("{}", json!({"pid": pid, "cfg_dir": claude::config_dir_of_pid(pid), "sid": sid}));
         }
         // 开发用：按 Python 版 golden 基准的条件画表头（不带颜色），和 Python 版对比
         // statetrail dump-header <对话记录> <配置目录> <wide|narrow> <宽度>
