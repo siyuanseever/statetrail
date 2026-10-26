@@ -648,6 +648,13 @@ impl Trail {
                 "pane.resize",
                 json!({"pane_id": self.target, "direction": "down", "amount": 0.5 - h}),
             );
+        } else {
+            // 正好对半分也把线挪一下再挪回来：plugin.pane.open 切出来不会马上改 Claude 终端的行数（herdr 0.9.5，
+            // 自带的 prefix + - 会），Claude 还按原来的高度画、只露出上半截看不见输入框，关掉时才一下子整屏重画，
+            // 就是「关的时候闪一下」（用户 2026-10-26 报的，命令行按钮没写 height，正好走这里）。挪线会让 herdr 重算尺寸。
+            for d in ["up", "down"] {
+                let _ = herdr::call("pane.resize", json!({"pane_id": pane, "direction": d, "amount": 0.01}));
+            }
         }
         self.tool = Some((pane, index));
         self.tool_check = None;
