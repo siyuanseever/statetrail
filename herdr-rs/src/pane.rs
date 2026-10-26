@@ -1311,7 +1311,10 @@ mod tests {
     fn install_prompt_is_valid_sh() {
         for prog in ["btop", "nosuchtool"] {
             let script = super::install_prompt(prog, "exec btop");
-            let ok = std::process::Command::new("sh").args(["-n", "-c", &script]).status().is_ok_and(|s| s.success());
+            let ok = std::process::Command::new("sh")
+                .args(["-n", "-c", &script])
+                .status()
+                .is_ok_and(|s| s.success());
             assert!(ok, "{script}");
         }
     }

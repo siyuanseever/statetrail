@@ -100,12 +100,24 @@ pub fn claude_proc(pane: &str) -> Option<ClaudeProc> {
     let shell = info["shell_pid"].as_u64().map(|x| x as u32);
     for p in info["foreground_processes"].as_array().into_iter().flatten() {
         if p["argv0"].as_str() == Some("claude") || is_version(p["name"].as_str().unwrap_or("")) {
-            let argv = p["argv"].as_array().into_iter().flatten().filter_map(|a| a.as_str().map(str::to_owned)).collect();
-            return p["pid"].as_u64().map(|x| ClaudeProc { pid: x as u32, argv, shell });
+            let argv = p["argv"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|a| a.as_str().map(str::to_owned))
+                .collect();
+            return p["pid"].as_u64().map(|x| ClaudeProc {
+                pid: x as u32,
+                argv,
+                shell,
+            });
         }
     }
     let sh = shell?.to_string();
-    let out = std::process::Command::new("ps").args(["-A", "-o", "pid=,ppid=,ucomm=,args="]).output().ok()?;
+    let out = std::process::Command::new("ps")
+        .args(["-A", "-o", "pid=,ppid=,ucomm=,args="])
+        .output()
+        .ok()?;
     String::from_utf8_lossy(&out.stdout).lines().find_map(|ln| {
         let mut rest = ln.trim_start();
         let mut f = Vec::new();
@@ -136,7 +148,9 @@ pub fn session_id(pane: &str, info: &Value) -> Option<String> {
         return Some(sid.to_owned());
     }
     let pid = claude_pid(pane)?;
-    let f = crate::claude::config_dir_of_pid(Some(pid)).join("sessions").join(format!("{pid}.json"));
+    let f = crate::claude::config_dir_of_pid(Some(pid))
+        .join("sessions")
+        .join(format!("{pid}.json"));
     let v: Value = serde_json::from_slice(&std::fs::read(f).ok()?).ok()?;
     v["sessionId"].as_str().map(str::to_owned)
 }

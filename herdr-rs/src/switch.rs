@@ -28,7 +28,15 @@ const TEAM_WAIT: Duration = Duration::from_secs(600); // 让领队收队后，�
 const IDLE_WAIT: Duration = Duration::from_secs(180); // 队友都退出后，最多等领队这一轮停下来
 const SHELLS: [&str; 6] = ["zsh", "bash", "fish", "sh", "-zsh", "-bash"];
 const KEEP_BOOL: [&str; 5] = ["--dangerously-skip-permissions", "--chrome", "--no-chrome", "--verbose", "--ide"];
-const KEEP_VAL: [&str; 7] = ["--permission-mode", "--model", "--effort", "--add-dir", "--settings", "--agent", "--append-system-prompt"];
+const KEEP_VAL: [&str; 7] = [
+    "--permission-mode",
+    "--model",
+    "--effort",
+    "--add-dir",
+    "--settings",
+    "--agent",
+    "--append-system-prompt",
+];
 
 pub struct Account {
     pub name: String,
@@ -177,7 +185,9 @@ fn ghostly(head: &str) -> bool {
     let mut rest = head;
     while let Some(i) = rest.find("\x1b[") {
         rest = &rest[i + 2..];
-        let Some(end) = rest.find(|c: char| c.is_ascii_alphabetic()) else { break };
+        let Some(end) = rest.find(|c: char| c.is_ascii_alphabetic()) else {
+            break;
+        };
         let (body, kind) = (&rest[..end], &rest[end..end + 1]);
         rest = &rest[end + 1..];
         if kind != "m" {
@@ -224,7 +234,9 @@ fn draft_text(lines: &[String], styled: &[String]) -> Option<String> {
             continue;
         }
         let ln = lines[i].trim_start_matches(|c: char| c.is_whitespace() || c == '│');
-        let Some(rest) = ln.strip_prefix('❯').or_else(|| ln.strip_prefix('>')) else { continue };
+        let Some(rest) = ln.strip_prefix('❯').or_else(|| ln.strip_prefix('>')) else {
+            continue;
+        };
         let text = rest.trim_end_matches(|c: char| c.is_whitespace() || c == '│').trim_start();
         if text.is_empty() || text.starts_with("Try \"") {
             return Some(String::new());
@@ -248,7 +260,9 @@ fn session_file(pid: u32, dir: &std::path::Path) -> Option<Value> {
 
 /// 窗格又回到 shell 了：前台只剩 shell，没有 claude。
 fn at_shell(pane: &str) -> bool {
-    let Ok(r) = herdr::call("pane.process_info", json!({"pane_id": pane})) else { return false };
+    let Ok(r) = herdr::call("pane.process_info", json!({"pane_id": pane})) else {
+        return false;
+    };
     let fg = r["process_info"]["foreground_processes"].as_array().cloned().unwrap_or_default();
     !fg.is_empty() && fg.iter().all(|p| SHELLS.contains(&p["name"].as_str().unwrap_or("")))
 }
@@ -283,8 +297,12 @@ fn quote(s: &str) -> String {
 
 /// 同一个标签页里除了 pane 自己以外的队友 → [(窗格, 队友名)]。队友是领队起的 claude，命令行带 --agent-id。
 fn team_mates(pane: &str) -> Vec<(String, String)> {
-    let Some(tab) = herdr::pane_info(pane).and_then(|i| i["tab_id"].as_str().map(str::to_owned)) else { return Vec::new() };
-    let Ok(r) = herdr::call("pane.list", json!({})) else { return Vec::new() };
+    let Some(tab) = herdr::pane_info(pane).and_then(|i| i["tab_id"].as_str().map(str::to_owned)) else {
+        return Vec::new();
+    };
+    let Ok(r) = herdr::call("pane.list", json!({})) else {
+        return Vec::new();
+    };
     r["panes"]
         .as_array()
         .into_iter()
@@ -401,7 +419,10 @@ pub fn switch_one(pane: &str, to: &Account, accts: &[Account], o: &Opts, log: &d
         }
         if o.dry {
             let names = join(&mates.iter().map(|m| m.1.clone()).collect::<Vec<_>>());
-            return (State::Ok, t("（演练）会先让领队收队（{names}），收完再退出重启").replace("{names}", &names));
+            return (
+                State::Ok,
+                t("（演练）会先让领队收队（{names}），收完再退出重启").replace("{names}", &names),
+            );
         }
         if let Some(bad) = disband(pane, &mates, log) {
             return bad;
@@ -469,7 +490,11 @@ pub fn switch_one(pane: &str, to: &Account, accts: &[Account], o: &Opts, log: &d
             return (State::Ok, t("已切到 {to}，接着原会话").replace("{to}", &to.name));
         }
     }
-    fail(t("已执行 {what}，但 30 秒内没看到它在 {to} 下起来，请看一眼窗格").replace("{what}", &line).replace("{to}", &to.name))
+    fail(
+        t("已执行 {what}，但 30 秒内没看到它在 {to} 下起来，请看一眼窗格")
+            .replace("{what}", &line)
+            .replace("{to}", &to.name),
+    )
 }
 
 // ---- 命令行 ---------------------------------------------------------------------
@@ -477,7 +502,10 @@ pub fn switch_one(pane: &str, to: &Account, accts: &[Account], o: &Opts, log: &d
 pub fn cmd_switch(args: &[String]) {
     let accts = accounts();
     let (mut to, mut panes, mut json_out) = (None, Vec::new(), false);
-    let mut o = Opts { dry: false, stop_bg: false };
+    let mut o = Opts {
+        dry: false,
+        stop_bg: false,
+    };
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -487,7 +515,10 @@ pub fn cmd_switch(args: &[String]) {
             "--json" => json_out = true,
             "--accounts" => {
                 // usage-monitor 用：列出账号名（和 accounts.json 一致）
-                println!("{}", json!(accts.iter().map(|a| json!({"name": a.name, "dir": a.dir})).collect::<Vec<_>>()));
+                println!(
+                    "{}",
+                    json!(accts.iter().map(|a| json!({"name": a.name, "dir": a.dir})).collect::<Vec<_>>())
+                );
                 return;
             }
             p => panes.push(p.to_owned()),
@@ -495,7 +526,10 @@ pub fn cmd_switch(args: &[String]) {
     }
     let Some(to) = to.and_then(|n| accts.iter().find(|a| a.name == n)) else {
         let names: Vec<&str> = accts.iter().map(|a| a.name.as_str()).collect();
-        eprintln!("usage: statetrail switch --to <{}> [--dry-run] [--stop-bg] [--json] <pane>...", names.join("|"));
+        eprintln!(
+            "usage: statetrail switch --to <{}> [--dry-run] [--stop-bg] [--json] <pane>...",
+            names.join("|")
+        );
         std::process::exit(2);
     };
     if panes.is_empty() {
@@ -541,15 +575,24 @@ mod tests {
         assert_eq!(draft_text(&v(&[rule, "❯ Try \"fix lint errors\"", rule]), &[]), Some(String::new()));
         assert_eq!(draft_text(&v(&["no box here"]), &[]), None);
         // 队友列表里选中的那一行也有 ❯，但上面不是横线
-        assert_eq!(draft_text(&v(&[rule, "❯ ", rule, "  ⏵⏵ auto mode on", "  ❯ ◯ polish-draft  首开体验"]), &[]), Some(String::new()));
+        assert_eq!(
+            draft_text(&v(&[rule, "❯ ", rule, "  ⏵⏵ auto mode on", "  ❯ ◯ polish-draft  首开体验"]), &[]),
+            Some(String::new())
+        );
         // 灰色建议输入（herdr 用 24 位色输出）
         let ghost = "\x1b[0m❯\u{a0}\x1b[38;2;153;153;153mcommit this\x1b[0m";
-        assert_eq!(draft_text(&v(&[rule, "❯\u{a0}commit this", rule]), &v(&[ghost])), Some(String::new()));
+        assert_eq!(
+            draft_text(&v(&[rule, "❯\u{a0}commit this", rule]), &v(&[ghost])),
+            Some(String::new())
+        );
         let dim = "\x1b[0m❯\u{a0}\x1b[2mcommit this";
         assert_eq!(draft_text(&v(&[rule, "❯\u{a0}commit this", rule]), &v(&[dim])), Some(String::new()));
         // 真敲进去的字不带颜色；提示符本身的颜色不算（它在 ❯ 前面）
         let real = "\x1b[38;2;153;153;153m❯\x1b[0m\u{a0}commit this";
-        assert_eq!(draft_text(&v(&[rule, "❯\u{a0}commit this", rule]), &v(&[real])), Some("commit this".into()));
+        assert_eq!(
+            draft_text(&v(&[rule, "❯\u{a0}commit this", rule]), &v(&[real])),
+            Some("commit this".into())
+        );
     }
 
     #[test]
@@ -569,8 +612,27 @@ mod tests {
 
     #[test]
     fn relaunch() {
-        let a = v(&["claude", "--model", "opus", "--resume", "old", "--dangerously-skip-permissions", "--effort=high", "-p"]);
-        assert_eq!(relaunch_args(&a, "new"), v(&["--model", "opus", "--dangerously-skip-permissions", "--effort=high", "--resume", "new"]));
+        let a = v(&[
+            "claude",
+            "--model",
+            "opus",
+            "--resume",
+            "old",
+            "--dangerously-skip-permissions",
+            "--effort=high",
+            "-p",
+        ]);
+        assert_eq!(
+            relaunch_args(&a, "new"),
+            v(&[
+                "--model",
+                "opus",
+                "--dangerously-skip-permissions",
+                "--effort=high",
+                "--resume",
+                "new"
+            ])
+        );
         assert_eq!(quote("/Users/x/.claude-l2"), "/Users/x/.claude-l2");
         assert_eq!(quote("claude2,l2"), "claude2,l2");
         assert_eq!(quote("a b'c"), "'a b'\\''c'");
