@@ -109,8 +109,6 @@ fn default_buttons() -> Vec<ToolButton> {
         b("Git", "lazygit", "git", Some(0.9), true, true),
         b("文件", "yazi", "files", Some(0.9), false, true),
         b("命令行", "$SHELL", "shell", None, false, false),
-        // btop：看 CPU / 内存 / 进程、结束进程（实时总览在 herdr 顶部标签栏右侧的状态区，那是 herdr 自己的配置）
-        b("监视器", "btop", "monitor", Some(0.9), false, true),
     ]
 }
 

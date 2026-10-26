@@ -28,7 +28,7 @@ const ICONS: [(&str, &str, &str, &str); 15] = [
     ("files", "\u{f07c}", "▤", ""),
     ("more", "\u{f141}", "⋯", "..."),
     ("shell", "\u{f120}", "›_", ""),
-    ("monitor", "\u{f201}", "▂▅", ""), // 折线图（nf-fa-line_chart）：btop
+    ("monitor", "\u{f201}", "▂▅", ""), // 折线图（nf-fa-line_chart）：给自己配的监视器类按钮用
     ("switch", "\u{f0ec}", "⇄", "<>"), // 账号后面：点这一行换账号、模型、effort、ultracode
 ];
 

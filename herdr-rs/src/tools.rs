@@ -72,35 +72,6 @@ pub fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// 「监视器」按钮用的 btop 配置：默认布局在 Claude 下面那一块里挤，磁盘列出同一块盘的七八个分区，内存被挤成一窄条。
-/// 第一次用时从你自己的 btop 配置复制一份到插件状态目录，只改两行：不要网络框、磁盘只看系统盘。
-/// 之后在 btop 里改的设置留在这份里（btop 退出时写回 -c 给的文件），不碰 ~/.config/btop。
-pub fn btop_conf() -> Option<PathBuf> {
-    let path = crate::state_dir().join("btop.conf");
-    if path.exists() {
-        return Some(path);
-    }
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| crate::home().join(".config"))
-        .join("btop/btop.conf");
-    let text = lean_btop(&std::fs::read_to_string(base).unwrap_or_default());
-    std::fs::create_dir_all(path.parent()?).ok()?;
-    std::fs::write(&path, text).ok()?;
-    Some(path)
-}
-
-fn lean_btop(orig: &str) -> String {
-    let set = [("shown_boxes", "\"cpu mem proc\""), ("disks_filter", "\"/\"")];
-    let mut out: Vec<String> = orig
-        .lines()
-        .filter(|l| !set.iter().any(|(k, _)| l.split('=').next().is_some_and(|x| x.trim() == *k)))
-        .map(str::to_owned)
-        .collect();
-    out.extend(set.iter().map(|(k, v)| format!("{k} = {v}")));
-    out.join("\n") + "\n"
-}
-
 pub struct Plugin {
     pub id: String,
     pub label: String,
@@ -205,13 +176,6 @@ pub fn load_plugins(cfg: &Config) -> Vec<Plugin> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn lean_btop_overrides_two_keys() {
-        let got = super::lean_btop("color_theme = \"x\"\nshown_boxes = \"cpu mem net proc\"\ndisks_filter = \"\"\n");
-        assert_eq!(got, "color_theme = \"x\"\nshown_boxes = \"cpu mem proc\"\ndisks_filter = \"/\"\n");
-        assert_eq!(super::lean_btop(""), "shown_boxes = \"cpu mem proc\"\ndisks_filter = \"/\"\n");
-    }
-
     use super::*;
 
     #[test]

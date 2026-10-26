@@ -550,12 +550,6 @@ impl Trail {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "/bin/sh".into());
         let mut cmd = button.command.clone();
-        if cmd.trim() == "btop" {
-            // 默认的「监视器」按钮：用插件自己那份精简布局（tools::btop_conf）；自定义的 btop 命令不动
-            if let Some(conf) = tools::btop_conf() {
-                cmd = format!("btop -c {}", tools::sh_quote(&conf.to_string_lossy()));
-            }
-        }
         let first = cmd.split_whitespace().next().unwrap_or("").trim_matches(['\'', '"']);
         let prog = first.replace("${SHELL}", &shell).replace("$SHELL", &shell); // 命令行按钮的 "$SHELL"：你的登录 shell
         // 没装：照常在下面开工具窗格，里面写着安装命令，回车就装，装完直接打开（以前只在表头闪一下提示，像是没反应）
@@ -973,7 +967,7 @@ fn install_prompt(prog: &str, cmd: &str) -> String {
     let brew = ["brew", "/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
         .into_iter()
         .find(|b| tools::which(b))
-        .filter(|_| ["lazygit", "yazi", "btop"].contains(&prog));
+        .filter(|_| ["lazygit", "yazi"].contains(&prog));
     let head = t("找不到 {p}").replace("{p}", prog);
     match brew {
         Some(b) => format!(
@@ -1528,8 +1522,8 @@ mod tests {
 
     #[test]
     fn install_prompt_is_valid_sh() {
-        for prog in ["btop", "nosuchtool"] {
-            let script = super::install_prompt(prog, "exec btop");
+        for prog in ["lazygit", "nosuchtool"] {
+            let script = super::install_prompt(prog, "exec lazygit");
             let ok = std::process::Command::new("sh")
                 .args(["-n", "-c", &script])
                 .status()

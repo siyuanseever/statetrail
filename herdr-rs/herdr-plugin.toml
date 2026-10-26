@@ -31,7 +31,7 @@ title = "statetrail"
 placement = "split"
 command = ["bin/statetrail", "pane"]
 
-# 底部的自定义按钮（配置里的 [[buttons]]，默认 Git = lazygit、文件 = yazi、命令行、监视器 = btop）：轨迹把它从 Claude
+# 底部的自定义按钮（配置里的 [[buttons]]，默认 Git = lazygit、文件 = yazi、命令行）：轨迹把它从 Claude
 # 下面切出来（占 Claude 那一格高度的 height / tool_height），除了命令行都是点外面就关。命令经 STATETRAIL_CMD 传进来。
 [[panes]]
 id = "tool"
