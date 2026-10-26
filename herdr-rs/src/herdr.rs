@@ -85,25 +85,45 @@ fn is_version(name: &str) -> bool {
     name.split('.').count() == 3 && name.split('.').all(|x| !x.is_empty() && x.bytes().all(|b| b.is_ascii_digit()))
 }
 
-/// 窗格里的 Claude 进程号。Claude 干活时前台进程组可能是它起的子进程（caffeinate、python），claude 本身不在里面，
-/// 这时去 shell 的直接子进程里找（ps 的 ucomm 是进程名，也就是版本号）。
-pub fn claude_pid(pane: &str) -> Option<u32> {
+/// 窗格里的 Claude 进程：进程号、命令行参数，和窗格里 shell 的进程号。
+pub struct ClaudeProc {
+    pub pid: u32,
+    pub argv: Vec<String>,
+    pub shell: Option<u32>,
+}
+
+/// 找窗格里的 Claude 进程。Claude 干活时前台进程组可能是它起的子进程（caffeinate、python），claude 本身不在里面，
+/// 这时去 shell 的直接子进程里找（ps 的 ucomm 是进程名，也就是版本号；这条路拿到的参数是按空格切开的）。
+pub fn claude_proc(pane: &str) -> Option<ClaudeProc> {
     let r = call("pane.process_info", json!({"pane_id": pane})).ok()?;
     let info = &r["process_info"];
+    let shell = info["shell_pid"].as_u64().map(|x| x as u32);
     for p in info["foreground_processes"].as_array().into_iter().flatten() {
         if p["argv0"].as_str() == Some("claude") || is_version(p["name"].as_str().unwrap_or("")) {
-            return p["pid"].as_u64().map(|x| x as u32);
+            let argv = p["argv"].as_array().into_iter().flatten().filter_map(|a| a.as_str().map(str::to_owned)).collect();
+            return p["pid"].as_u64().map(|x| ClaudeProc { pid: x as u32, argv, shell });
         }
     }
-    let shell = info["shell_pid"].as_u64()?.to_string();
-    let out = std::process::Command::new("ps").args(["-A", "-o", "pid=,ppid=,ucomm="]).output().ok()?;
+    let sh = shell?.to_string();
+    let out = std::process::Command::new("ps").args(["-A", "-o", "pid=,ppid=,ucomm=,args="]).output().ok()?;
     String::from_utf8_lossy(&out.stdout).lines().find_map(|ln| {
-        let f: Vec<&str> = ln.split_whitespace().collect();
-        match f.as_slice() {
-            [pid, ppid, name, ..] if *ppid == shell && (is_version(name) || *name == "claude") => pid.parse().ok(),
-            _ => None,
+        let mut rest = ln.trim_start();
+        let mut f = Vec::new();
+        for _ in 0..3 {
+            let (a, b) = rest.split_once(char::is_whitespace)?;
+            f.push(a);
+            rest = b.trim_start();
         }
+        (f[1] == sh && (is_version(f[2]) || f[2] == "claude")).then(|| ClaudeProc {
+            pid: f[0].parse().unwrap_or(0),
+            argv: rest.split_whitespace().map(str::to_owned).collect(),
+            shell,
+        })
     })
+}
+
+pub fn claude_pid(pane: &str) -> Option<u32> {
+    claude_proc(pane).map(|p| p.pid)
 }
 
 /// 这一格是 Claude，就返回它的会话 id。herdr 的 Claude 集成只在 SessionStart 时报会话 id，装集成之前就开着的会话

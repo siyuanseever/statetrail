@@ -169,7 +169,10 @@ impl Trail {
         self.name_tab(&info);
         self.status = info["agent_status"].as_str().map(str::to_owned);
         if info["agent"].as_str() == Some("claude") {
-            self.no_claude_since = None;
+            if self.no_claude_since.take().is_some() && self.sid.is_some() {
+                // Claude 退出又起来了（比如换账号 --resume 同一个会话）：会话 id 可能没变，配置目录要重认
+                self.cfg_dir = claude::config_dir_of_pid(herdr::claude_pid(&self.target));
+            }
         } else if self.no_claude_since.is_none() {
             self.no_claude_since = Some(Instant::now());
         }
@@ -1209,6 +1212,8 @@ fn run_loop(
                 let parts: Vec<&str> = c.split_whitespace().collect();
                 match parts.as_slice() {
                     ["toggle"] => s.toggle(size.width),
+                    // statetrail switch 换完账号：会话 id 没变，按新进程重认配置目录（账号、额度跟着变）
+                    ["rescan"] => s.cfg_dir = claude::config_dir_of_pid(herdr::claude_pid(&s.target)),
                     ["plugrun", plugin, action] => {
                         std::thread::sleep(Duration::from_millis(200)); // ⋯ 的 popup 先关掉
                         s.run_plugin(plugin, action, tx);

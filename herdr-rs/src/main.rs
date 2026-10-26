@@ -9,6 +9,7 @@ mod jump;
 mod pane;
 mod picker;
 mod render;
+mod switch;
 mod theme;
 mod tools;
 mod transcript;
@@ -355,6 +356,7 @@ fn main() {
         Some("toggle") => cmd_toggle(&cfg),
         Some("menu") => picker::cmd_menu(),
         Some("pickrepo") => picker::cmd_pickrepo(&std::env::args().nth(2).unwrap_or_default()),
+        Some("switch") => switch::cmd_switch(&std::env::args().skip(2).collect::<Vec<_>>()),
         Some("version") => println!("statetrail {}", env!("CARGO_PKG_VERSION")),
         // 开发用：按 ⟳ 的规矩查一次额度（statetrail refresh-usage <配置目录> [force]）
         Some("refresh-usage") => {
