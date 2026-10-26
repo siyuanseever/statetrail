@@ -1,4 +1,4 @@
-//! 弹出来选一项的扁平列表：⋯ 的插件菜单（`statetrail menu`）和 Git 按钮的选仓库（`statetrail pickrepo`）。
+//! 弹出来选一项的扁平列表：Git 按钮的选仓库（`statetrail pickrepo`）。
 //! Python 版用 fzf 做；这里自己画，样子照它：最上面一行灰字说明，下面一行一项，选中那一行 ▌ 加底色。
 //! 不画树、不画框。点一下或回车就选，Esc 不选。
 
@@ -10,7 +10,6 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use std::io::Write;
 
 use crate::i18n::t;
 use crate::render::{self, SLine};
@@ -135,32 +134,6 @@ fn run(term: &mut Terminal<CrosstermBackend<std::io::Stdout>>, note: &str, rows:
             },
             _ => {}
         }
-    }
-}
-
-/// ⋯ 的 popup 里跑的：列出所有插件的所有 action（STATETRAIL_MENU 一行一条「插件 id \t action id \t 显示的字」），
-/// 选中的那一条交回轨迹（写进它的 socket：plugrun 插件 动作），由轨迹去调：popup 开着时整个会话只认它。
-pub fn cmd_menu() {
-    let (Ok(menu), Ok(sock)) = (std::env::var("STATETRAIL_MENU"), std::env::var("STATETRAIL_SOCK")) else {
-        eprintln!("statetrail menu: STATETRAIL_MENU / STATETRAIL_SOCK not set");
-        std::process::exit(2);
-    };
-    let rows: Vec<Row> = std::fs::read_to_string(&menu)
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|ln| {
-            let mut it = ln.splitn(3, '\t');
-            let (p, a, text) = (it.next()?, it.next()?, it.next()?);
-            Some(Row {
-                key: format!("{p} {a}"),
-                line: vec![(text.to_owned(), None)],
-            })
-        })
-        .collect();
-    if let Some(k) = pick(&t("点一下就运行，Esc 不选"), &rows, true)
-        && let Ok(mut s) = std::os::unix::net::UnixStream::connect(sock)
-    {
-        let _ = writeln!(s, "plugrun {k}");
     }
 }
 

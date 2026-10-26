@@ -352,7 +352,6 @@ fn main() {
         Some("pane") => pane::run(cfg),
         Some("auto") => cmd_auto(&cfg),
         Some("toggle") => cmd_toggle(&cfg),
-        Some("menu") => picker::cmd_menu(),
         Some("pickrepo") => picker::cmd_pickrepo(&std::env::args().nth(2).unwrap_or_default()),
         Some("switch") => switch::cmd_switch(&std::env::args().skip(2).collect::<Vec<_>>()),
         // 只改这个会话：statetrail set <窗格> model <opus|fable|sonnet|haiku> | effort <low…max> | ultracode <on|off>

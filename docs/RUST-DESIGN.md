@@ -35,7 +35,7 @@ statetrail/
 | `jump.rs` | 让 Claude 滚到某一轮的那套算法（读屏、PageUp / PageDown、找回复开头） | `core/jump.py` |
 | `ui/` | 表头（按钮、柱子、模型账号）、列表（自己记滚动位置，▲ / ▼ 翻页、点击、悬停）、底部（自己的按钮、插件图标、⋯）；宽版 / 窄版 | `core/render.py`、`Sidebar.header/rows/footer`、fzf |
 | `tools.rs` | 找目录、找 git 仓库、找程序，列出其他 herdr 插件、绑 action | `live_dir`、`git_root`、`find_repos`、`load_plugins` |
-| `picker.rs` | Git 选仓库和 ⋯ 弹窗：自己画的扁平列表，不再起 fzf | `cmd_pickrepo`、`cmd_menu` |
+| `picker.rs` | Git 选仓库：自己画的扁平列表，不再起 fzf（⋯ 后来改成轨迹里就地弹的下拉菜单，见下文） | `cmd_pickrepo`、`cmd_menu` |
 | `pane.rs` 里的底部 | 底部按钮开工具窗格（Claude 下面，高度按按钮）、点外面就关、开新标签页的插件跳回原页 | `run_tool`、`run_plugin`、`footer` |
 | `theme.rs`、`i18n.rs` | herdr 的 18 套调色板、中英文（`themes.json`、`en.tsv` 编进程序里） | `theme.py`、`core/i18n.py` |
 | `update.rs` | 发现插件被更新（看 `plugins.json`）就在原地换成新程序 | `code_sig`、`code_changed` |
@@ -97,6 +97,10 @@ herdr plugin install siyuanseever/statetrail/herdr
 ## 本机从 tmux 迁到 herdr 之后补的（2026-10-26）
 
 - 默认打开窄版（细条，19 列）：用户原话「我们用细条版本作为默认版本吧」。配置 `default_mode = "wide"` 才开宽版；Python 版不动，仍默认宽版。
+- ⋯ 改成轨迹里就地弹的下拉菜单（用户原话「不要居中，就跟我们的切换账号和 model 差不多的弹窗」）：以前用 herdr 的 popup，只能开在屏幕正中。
+  现在贴着底部按钮、靠右弹出，和模型 / 账号菜单同一套（`ui::draw_menu`，悬停垫底色）。一个插件一行，点了调它的默认动作；
+  动作不止一个的，下面缩进列出：宽版用标题（去掉「插件名:」前缀），细条用动作 id（标题在 17 列里截成「session g…」分不清）。
+  manifest 里的 `menu` 窗格、`statetrail menu` 子命令、`plugrun` 回传都删了。只列有 `pane` 上下文动作的插件（和以前一样）。
 - 窄版表头 effort 单独一行（用户原话「effort 单独一行」）：以前是「Opus5.5 hi」挤一行、effort 只留两个字；现在模型名一行、下一行是 effort 全名，和模型名对齐，两段都还能点开下拉菜单。
 
 来自迁移会话留下的交接（`docs/HANDOFF-2026-10-26-herdr.md`，已并进这里、删掉）。本机现在装的就是这个目录：

@@ -255,7 +255,7 @@ impl Trail {
                 self.kick_usage(true, tx);
                 self.plugins = tools::load_plugins(&self.cfg); // 刚装 / 刚卸的插件，点一下 ⟳ 底部就跟上
             }
-            "plugmenu" => self.plugin_menu(),
+            "plugmenu" => self.plugin_menu(width),
             a if a.starts_with("plug:") => {
                 if let Some(p) = a[5..].parse::<usize>().ok().and_then(|i| self.plugins.get(i)) {
                     let (id, action) = (p.id.clone(), p.action.clone());
@@ -826,36 +826,38 @@ impl Trail {
         });
     }
 
-    fn plugin_menu(&mut self) {
-        let rows: Vec<String> = self
-            .plugins
-            .iter()
-            .flat_map(|p| {
-                p.actions
-                    .iter()
-                    .map(move |(a, title)| format!("{}\t{a}\t{}  {title}", p.id, p.label))
-            })
-            .collect();
-        if rows.is_empty() {
+    /// ⋯：在轨迹里就地弹一个下拉菜单（和模型 / 账号那几个一样），贴着底部按钮、靠右。
+    /// 一个插件一行（点了调它的默认动作），有好几个动作的，下面缩进列出各个动作（宽版用标题、去掉「插件名:」前缀；细条用动作 id）。
+    /// 以前用 herdr 的 popup，只能开在屏幕正中间（用户 2026-10-26：「不要居中，就跟切换账号和 model 差不多的弹窗」）。
+    fn plugin_menu(&mut self, width: u16) {
+        let narrow = width < WIDE_MIN;
+        let room = (width as usize).saturating_sub(4).max(4); // 框 2 列 + 前面 1 格空 + 右边留 1 格（框宽超出时 draw_menu 收到窗格宽）
+        let fit = |s: String| {
+            if unicode_width::UnicodeWidthStr::width(s.as_str()) <= room {
+                return s;
+            }
+            crate::render::plain(&crate::render::clip_line(vec![(s, None)], room - 1)) + "…"
+        };
+        let mut items = Vec::new();
+        for p in &self.plugins {
+            items.push((format!("plug {} {}", p.id, p.action), fit(p.label.clone()), false));
+            if p.actions.len() > 1 {
+                for (a, title) in &p.actions {
+                    let short = title
+                        .split_once(':')
+                        .filter(|(head, _)| head.trim().eq_ignore_ascii_case(&p.label))
+                        .map_or(title.as_str(), |(_, rest)| rest.trim());
+                    // 细条一律用动作 id（open-split、open-tab）：标题放不下，zoetrope 三个都截成「session g…」分不清
+                    let text = if narrow { a.as_str() } else { short };
+                    items.push((format!("plug {} {a}", p.id), fit(format!("  {text}")), false));
+                }
+            }
+        }
+        if items.is_empty() {
             return;
         }
-        let file = self.run_file("menu");
-        let _ = std::fs::write(&file, rows.join("\n") + "\n");
-        let widest = rows
-            .iter()
-            .map(|r| unicode_width::UnicodeWidthStr::width(r.rsplit('\t').next().unwrap_or("")))
-            .max()
-            .unwrap_or(0);
-        let r = herdr::call(
-            "plugin.pane.open",
-            json!({"plugin_id": crate::plugin_id(), "entrypoint": "menu", "placement": "popup", "focus": true,
-                   "width": (widest + 8).clamp(40, 100), "height": (rows.len() + 4).min(30),
-                   "env": {"STATETRAIL_MENU": file, "STATETRAIL_SOCK": sock_of(&self.me),
-                           "PATH": std::env::var("PATH").unwrap_or_default()}}),
-        );
-        if let Err(e) = r {
-            self.say(format!("⋯: {e}"), Duration::from_secs(6));
-        }
+        let h = items.len() as u16 + 2;
+        self.menu = Some(ui::Menu { x: u16::MAX, y: self.footer_top.saturating_sub(h), items });
     }
 
     /// herdr 的插件登记（plugins.json）改过没有：装、卸、开、关插件都会写它。只看修改时间，不问 herdr。
@@ -1345,8 +1347,15 @@ fn run_loop(
                         .map(|h| h.3.clone());
                     s.menu = None;
                     s.menu_hits.clear();
-                    if let Some((kind, value)) = hit.as_deref().and_then(|k| k.split_once(' ')) {
-                        s.apply_setting(kind, value, tx);
+                    match hit.as_deref().and_then(|k| k.split_once(' ')) {
+                        Some(("plug", rest)) => {
+                            if let Some((plugin, action)) = rest.split_once(' ') {
+                                let (plugin, action) = (plugin.to_owned(), action.to_owned());
+                                s.run_plugin(&plugin, &action, tx);
+                            }
+                        }
+                        Some((kind, value)) => s.apply_setting(kind, value, tx),
+                        None => {}
                     }
                 }
                 MouseEventKind::Down(MouseButton::Left) if m.row >= s.footer_top => {
@@ -1425,10 +1434,6 @@ fn run_loop(
                     ["rescan"] => {
                         s.cfg_dir = claude::config_dir_of_pid(herdr::claude_pid(&s.target));
                         s.model_now = None; // 重起的 Claude 按原来的启动参数起，只改这个会话的模型 / effort 没了
-                    }
-                    ["plugrun", plugin, action] => {
-                        std::thread::sleep(Duration::from_millis(200)); // ⋯ 的 popup 先关掉
-                        s.run_plugin(plugin, action, tx);
                     }
                     _ => {}
                 }

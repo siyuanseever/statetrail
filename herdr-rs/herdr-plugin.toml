@@ -40,9 +40,3 @@ placement = "split"
 # 目录进不去（被删了）就在家目录里开，别让窗格一闪就没了
 command = ["sh", "-c", "cd \"${STATETRAIL_CWD:-$PWD}\" 2>/dev/null || cd \"$HOME\"; exec sh -c \"$STATETRAIL_CMD\""]
 
-# 底部 ⋯：列出其他 herdr 插件的所有 action，点一下就运行（statetrail menu，选中的那一条交回轨迹去调）
-[[panes]]
-id = "menu"
-title = "plugins"
-placement = "popup"
-command = ["bin/statetrail", "menu"]
