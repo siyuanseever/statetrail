@@ -55,7 +55,6 @@ Claude 的目录已经不在了，改在 {d} 打开	Claude's directory is gone; 
 这里没有 Git 仓库	no Git repository here
 选一个仓库，Esc 退出	pick a repository, Esc to leave
 监视器	Monitor
-找不到 {p}，可以用 brew install {p} 装上	{p} not found; install it with brew install {p}
 
 # 换账号（statetrail switch），从 tmux 版 lib/en.tsv 拷来
 {pane} 退出	{pane} exiting
@@ -84,3 +83,6 @@ Claude 的目录已经不在了，改在 {d} 打开	Claude's directory is gone; 
 队友：随领队收队，不单独切	teammate: goes with its lead, not switched on its own
 （演练）会先让领队收队（{names}），收完再退出重启	(dry run) would ask the lead to wind down ({names}), then exit and restart
 （演练）会退出再执行：{line}	(dry run) would exit, then run: {line}
+按回车安装，点外面或 Ctrl-C 取消	Enter to install; click outside or Ctrl-C to cancel
+没装上，按回车关闭	Install failed; Enter to close
+先装上它，或者在配置里改这个按钮的命令。按回车关闭	Install it first, or change this button's command in the config. Enter to close

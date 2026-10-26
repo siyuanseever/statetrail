@@ -515,17 +515,8 @@ impl Trail {
         let mut cmd = button.command.clone();
         let first = cmd.split_whitespace().next().unwrap_or("").trim_matches(['\'', '"']);
         let prog = first.replace("${SHELL}", &shell).replace("$SHELL", &shell); // 命令行按钮的 "$SHELL"：你的登录 shell
-        if !tools::which(&prog) {
-            // 默认按钮的几个工具 Homebrew 里都有同名的包：顺手说怎么装
-            let brew = cfg!(target_os = "macos") && ["lazygit", "yazi", "btop"].contains(&prog.as_str());
-            let msg = if brew {
-                t("找不到 {p}，可以用 brew install {p} 装上")
-            } else {
-                t("找不到 {p}")
-            };
-            self.say(msg.replace("{p}", &prog), Duration::from_secs(8));
-            return;
-        }
+        // 没装：照常在下面开工具窗格，里面写着安装命令，回车就装，装完直接打开（以前只在表头闪一下提示，像是没反应）
+        let missing = !tools::which(&prog);
         let want = herdr::pane_info(&self.target)
             .and_then(|i| i["foreground_cwd"].as_str().map(str::to_owned))
             .unwrap_or_default();
@@ -542,7 +533,7 @@ impl Trail {
                 Duration::from_secs(8),
             );
         }
-        let lazygit = prog == "lazygit";
+        let lazygit = prog == "lazygit" && !missing;
         if button.pick_repo && lazygit && !cwd.is_empty() && tools::git_root(&cwd).is_none() {
             // 不在仓库里：下面只有一个仓库就直接开它，好几个就先让你点一个（statetrail pickrepo），一个都没有就只提示
             let repos = tools::find_repos(std::path::Path::new(&cwd), 2);
@@ -564,6 +555,9 @@ impl Trail {
                     );
                 }
             }
+        }
+        if missing {
+            cmd = install_prompt(&prog, &cmd);
         }
         let mut env = json!({"STATETRAIL_CWD": cwd, "STATETRAIL_CMD": cmd,
                              "PATH": std::env::var("PATH").unwrap_or_default(), "SHELL": shell});
@@ -817,6 +811,33 @@ impl Trail {
                 let _ = writeln!(f, "{log}");
             }
         });
+    }
+}
+
+/// 工具没装时工具窗格里跑的：说找不到，给出安装命令。默认按钮的几个工具 Homebrew 里都有同名的包，有 brew 就回车直接装、
+/// 装完接着打开；别的只说找不到，回车关掉。
+fn install_prompt(prog: &str, cmd: &str) -> String {
+    let brew = ["brew", "/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
+        .into_iter()
+        .find(|b| tools::which(b))
+        .filter(|_| ["lazygit", "yazi", "btop"].contains(&prog));
+    let head = t("找不到 {p}").replace("{p}", prog);
+    match brew {
+        Some(b) => format!(
+            "printf '\\n  %s\\n\\n    $ brew install %s\\n\\n  %s ' {} {} {}; read -r _ || exit; \
+             {} install {} && {{ clear; {cmd}; }} || {{ printf '\\n  %s ' {}; read -r _; }}",
+            sh_quote(&head),
+            sh_quote(prog),
+            sh_quote(&t("按回车安装，点外面或 Ctrl-C 取消")),
+            sh_quote(b),
+            sh_quote(prog),
+            sh_quote(&t("没装上，按回车关闭")),
+        ),
+        None => format!(
+            "printf '\\n  %s\\n\\n  %s ' {} {}; read -r _",
+            sh_quote(&head),
+            sh_quote(&t("先装上它，或者在配置里改这个按钮的命令。按回车关闭")),
+        ),
     }
 }
 
@@ -1280,6 +1301,18 @@ fn run_loop(
             if s.no_claude_since.is_some() {
                 due.push(now + GONE_GRACE + Duration::from_millis(500));
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn install_prompt_is_valid_sh() {
+        for prog in ["btop", "nosuchtool"] {
+            let script = super::install_prompt(prog, "exec btop");
+            let ok = std::process::Command::new("sh").args(["-n", "-c", &script]).status().is_ok_and(|s| s.success());
+            assert!(ok, "{script}");
         }
     }
 }
