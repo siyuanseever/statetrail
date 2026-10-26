@@ -77,7 +77,6 @@ pub struct Plugin {
     pub label: String,
     pub icon: String,
     pub action: String,
-    pub actions: Vec<(String, String)>, // (action id, 标题)
 }
 
 /// 插件的第一个 action 默认绑什么：有的插件第一个 action 是 overlay，herdr 0.9.5 的 overlay 会盖满整个标签页、
@@ -155,20 +154,11 @@ pub fn load_plugins(cfg: &Config) -> Vec<Plugin> {
                 .map_or("", |r| if t == 0 { r.1 } else { r.2 })
                 .to_owned(),
         };
-        let actions = avail
-            .iter()
-            .filter_map(|a| {
-                let id = a["action_id"].as_str()?.to_owned();
-                let title = a["title"].as_str().filter(|t| !t.is_empty()).unwrap_or(&id).to_owned();
-                Some((id, title))
-            })
-            .collect();
         out.push(Plugin {
             id: pid.to_owned(),
             label,
             icon,
             action,
-            actions,
         });
     }
     out

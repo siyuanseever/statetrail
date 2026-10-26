@@ -827,32 +827,25 @@ impl Trail {
     }
 
     /// ⋯：在轨迹里就地弹一个下拉菜单（和模型 / 账号那几个一样），贴着底部按钮、靠右。
-    /// 一个插件一行（点了调它的默认动作），有好几个动作的，下面缩进列出各个动作（宽版用标题、去掉「插件名:」前缀；细条用动作 id）。
-    /// 以前用 herdr 的 popup，只能开在屏幕正中间（用户 2026-10-26：「不要居中，就跟切换账号和 model 差不多的弹窗」）。
+    /// 只列底部没放下的插件，一个插件一行、只写名字，点了调它的默认动作（用户 2026-10-26：「每一个插件只显示一个
+    /// 标题就可以了，其它功能不要展示了」）。以前用 herdr 的 popup，只能开在屏幕正中间，还把每个插件的所有动作都列出来。
     fn plugin_menu(&mut self, width: u16) {
-        let narrow = width < WIDE_MIN;
         let room = (width as usize).saturating_sub(4).max(4); // 框 2 列 + 前面 1 格空 + 右边留 1 格（框宽超出时 draw_menu 收到窗格宽）
-        let fit = |s: String| {
-            if unicode_width::UnicodeWidthStr::width(s.as_str()) <= room {
-                return s;
-            }
-            crate::render::plain(&crate::render::clip_line(vec![(s, None)], room - 1)) + "…"
-        };
-        let mut items = Vec::new();
-        for p in &self.plugins {
-            items.push((format!("plug {} {}", p.id, p.action), fit(p.label.clone()), false));
-            if p.actions.len() > 1 {
-                for (a, title) in &p.actions {
-                    let short = title
-                        .split_once(':')
-                        .filter(|(head, _)| head.trim().eq_ignore_ascii_case(&p.label))
-                        .map_or(title.as_str(), |(_, rest)| rest.trim());
-                    // 细条一律用动作 id（open-split、open-tab）：标题放不下，zoetrope 三个都截成「session g…」分不清
-                    let text = if narrow { a.as_str() } else { short };
-                    items.push((format!("plug {} {a}", p.id), fit(format!("  {text}")), false));
-                }
-            }
-        }
+        let shown: std::collections::HashSet<&str> = self.foot_rows.iter().flatten().map(|b| b.1.as_str()).collect();
+        let items: Vec<_> = self
+            .plugins
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !shown.contains(format!("plug:{i}").as_str()))
+            .map(|(_, p)| {
+                let label = if unicode_width::UnicodeWidthStr::width(p.label.as_str()) <= room {
+                    p.label.clone()
+                } else {
+                    crate::render::plain(&crate::render::clip_line(vec![(p.label.clone(), None)], room - 1)) + "…"
+                };
+                (format!("plug {} {}", p.id, p.action), label, false)
+            })
+            .collect();
         if items.is_empty() {
             return;
         }
