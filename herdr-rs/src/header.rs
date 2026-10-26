@@ -276,8 +276,9 @@ pub fn narrow(width: usize, i: &Info) -> Vec<SLine> {
         fields.retain(|(p, ln)| *p != prio || width_of(ln) <= room);
     }
     lines.extend(fields.into_iter().map(|(_, l)| l));
-    if let Some(last) = lines.pop() {
-        lines.push(render::lead(last, i.up_tag, i.slot)); // ▲ 放在最后一行（离列表最近）最前面
+    if i.slot > 0 {
+        // ▲ 单独占表头最后一行（离列表最近），不和 7d 挤一行（用户定的）；翻到顶没有 ▲ 也留着这行，列表不跟着上下跳
+        lines.push(render::lead(Vec::new(), i.up_tag, i.slot));
     }
     lines.into_iter().map(|l| clip_line(l, room)).collect()
 }
