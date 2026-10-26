@@ -107,7 +107,7 @@ struct Trail {
     hot: Vec<(usize, usize, usize, &'static str)>, // 表头里点了弹下拉菜单的几段字（header::hot_spots）
     menu: Option<ui::Menu>,                        // 开着的下拉菜单
     menu_hits: Vec<(u16, u16, u16, String)>,
-    hover: Option<(u16, u16)>, // 鼠标停在哪（行, 列）：能点的字、菜单项停上去就反色
+    hover: Option<(u16, u16)>, // 鼠标停在哪（行, 列）：能点的字、菜单项停上去就亮起来
     mc: (Option<u64>, (String, String)), // (对话记录大小, (模型, 上下文))：没变就不重读尾巴
     // 刚换了模型 / effort：(换之前对话记录里的模型, 换成的)。对话记录要等下一条回复才写新模型，在那之前表头先显示换成的
     model_now: Option<(String, String)>,
@@ -1258,7 +1258,7 @@ fn run_loop(
             let mut menu_hits = Vec::new();
             term.draw(|f| {
                 drawn = Some(ui::draw(f, &head, &footer, &view, s.offset));
-                // 能点的字：平时加下划线，鼠标停上去反色（菜单开着时只亮菜单项）
+                // 能点的字：平时垫底色，鼠标停上去换强调色底（菜单开着时只亮菜单项）
                 let on = if s.menu.is_none() { s.hover.and_then(|h| s.hover_key(h)) } else { None };
                 for &(i, a, b, _) in &s.hot {
                     let lit = on == Some((i as u16, a as u16));
