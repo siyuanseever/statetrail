@@ -122,7 +122,16 @@ statetrail switch --to <账号> [--dry-run] [--stop-bg] [--json] <窗格>...
 - 带队友的领队：先往它输入框里打一句收队，等同一标签页里带 `--agent-id` 的窗格都退出再切。这条路照搬了，本机 herdr 里还没有 agent team，没实测过。
 - usage-monitor 会话页的「切到 l2」按钮：`usage-monitor/switch_account.py` 对 herdr 窗格调 `statetrail switch --json`（从 herdr 的 `plugins.json`
   找程序），tmux 窗格照旧走 claude-tmux-sessions（usage-monitor `cabfd50`）。
-- 轨迹上还没有换账号的按钮（tmux 版侧栏有 ⇄），要不要加待定。
+- 轨迹表头的下拉菜单（`1676fae`，用户 2026-10-26 要的）：点模型名、「/high」、账号名（后面跟着 ⇄），在那段字正下方弹出模型 / effort（带 ultracode
+  开关）/ 账号的列表。菜单由轨迹自己画：herdr 的 popup 没有位置参数，只能开在**当前看着的那个标签页**正中，不管是谁叫开的。
+  模型和 effort 走 `/model` 选择器按 `s`（只改这个会话）：带参数的 `/model sonnet`、`/effort low` 会顺手写进 `settings.json` 当新会话默认，
+  数字键也会；对话已缓存时还会问「Switch model?」，自动回车确认。换账号会按原启动参数重起，只改这个会话的模型 / effort 随之失效。
+
+### 底部按钮的工具没装（`41f5dd4`）
+
+以前点了只在表头闪 8 秒提示，用户以为没反应。现在照常在 Claude 下面开工具窗格，里面写「找不到 btop　$ brew install btop　按回车安装」，
+装完直接打开工具；没有 brew 或者是自定义命令就只说找不到。实测时 `brew uninstall btop` 顺带 autoremove 了无关的 p7zip（已装回）：
+以后要卸东西做测试，先 `brew autoremove --dry-run` 看一眼，或者设 `HOMEBREW_NO_AUTOREMOVE=1`。
 
 迁移时踩过的坑：`claude --resume <id>` 打开的如果是后台会话（`--bg`，或退出时选了留在后台），只是挂上去看，杀掉后台进程这边也跟着退出；
 同一个会话不要在两处同时开。
