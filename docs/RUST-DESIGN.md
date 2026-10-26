@@ -91,6 +91,42 @@ herdr plugin install siyuanseever/statetrail/herdr
 
 每一步都在单独的 worktree 里做，做完先 link 到你本机试，资源检查达标才算这一步完成。第 6 步之前，不动大家正在装的 Python 版。
 
+## 本机从 tmux 迁到 herdr 之后补的（2026-10-26）
+
+来自迁移会话留下的交接（`docs/HANDOFF-2026-10-26-herdr.md`，已并进这里、删掉）。本机现在装的就是这个目录：
+`herdr plugin link ~/projects/statetrail/herdr-rs`。link 的目录 `herdr plugin update` 管不到，有新提交要本地
+`cargo build --release`，再按 manifest 注释用 `bin/.new` + `mv` 换掉程序；开着的轨迹会自己原地重启。
+
+| 问题 | 怎么处理的 | 提交 |
+|---|---|---|
+| herdr 的 Claude 集成只在 SessionStart 报会话 id，之前就开着的会话轨迹显示「找不到会话」 | `herdr::session_id` 没有 `agent_session` 就读 `<配置目录>/sessions/<pid>.json` 的 `sessionId` | `bf4f9e2` |
+| 会话 id 后报、对话记录后出现时没有事件，轨迹不刷新 | 没有对话记录时每 5 秒（`AGENT_CHECK`）重查一次 | `bf4f9e2` |
+| Claude 干活时前台进程可能是它的子进程，`claude_pid` 返回空，l2 的会话被当成 l | 前台里没有就从 shell 的直接子进程里找（`ps` 的 ucomm 是版本号） | `bf4f9e2` |
+| herdr 服务的 PATH 里 python3 是 3.9.6 | Rust 版不调 python3，不受影响 | — |
+| herdr 里没有 tmux 版写的 effort 窗格选项 | 轨迹从对话记录读 effort，不受影响；usage-monitor 会话页的 effort 仍是空的 | — |
+| 换账号后会话 id 不变，表头还显示旧账号 | Claude 在窗格里退出又起来、或收到 `rescan` 命令时，按新进程重认配置目录 | `c7c5ddf` |
+
+### 换账号：`statetrail switch`（`src/switch.rs`）
+
+用户要求把换账号搬进 Rust 版。从 `claude-tmux-sessions/bin/switch_account.py` 搬过来，账号配置（`~/.config/claude-tmux/accounts.json`）、
+安全闸和提示文字都一样，只是读屏、发键改用 herdr：
+
+```
+statetrail switch --to <账号> [--dry-run] [--stop-bg] [--json] <窗格>...
+  /exit → 等前台回到 shell → env -u ... CLAUDE_CONFIG_DIR=<目录> claude <保留的启动选项> --resume <同一个会话 id>
+  → 等新进程的 sessions/<pid>.json 出现在目标账号目录、会话 id 没变 → 叫旁边的轨迹 rescan
+```
+
+- 安全闸：只动空闲的（herdr 状态和屏幕都要是空闲）；输入框有草稿不动（herdr 读出来真敲的字不带颜色，Claude 的灰色建议是 SGR 2，不算草稿）；
+  挂着后台 / 定时任务不动，`--stop-bg` 时在退出确认框里选「Exit and stop tasks」；队友、后台会话不动；已是目标账号的跳过；当前窗格不动。
+- 带队友的领队：先往它输入框里打一句收队，等同一标签页里带 `--agent-id` 的窗格都退出再切。这条路照搬了，本机 herdr 里还没有 agent team，没实测过。
+- usage-monitor 会话页的「切到 l2」按钮：`usage-monitor/switch_account.py` 对 herdr 窗格调 `statetrail switch --json`（从 herdr 的 `plugins.json`
+  找程序），tmux 窗格照旧走 claude-tmux-sessions（usage-monitor `cabfd50`）。
+- 轨迹上还没有换账号的按钮（tmux 版侧栏有 ⇄），要不要加待定。
+
+迁移时踩过的坑：`claude --resume <id>` 打开的如果是后台会话（`--bg`，或退出时选了留在后台），只是挂上去看，杀掉后台进程这边也跟着退出；
+同一个会话不要在两处同时开。
+
 ## 待官方，这次不做
 
 - 在 Claude 输出里 Ctrl+点击文件路径直接打开。herdr 的 `[[link_handlers]]` 只接 OSC 8 链接，Claude Code 在 herdr 里不输出 OSC 8；作者给的临时办法
