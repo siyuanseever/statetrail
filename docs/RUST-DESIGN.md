@@ -122,7 +122,7 @@ statetrail switch --to <账号> [--dry-run] [--stop-bg] [--json] <窗格>...
 - 带队友的领队：先往它输入框里打一句收队，等同一标签页里带 `--agent-id` 的窗格都退出再切。这条路照搬了，本机 herdr 里还没有 agent team，没实测过。
 - usage-monitor 会话页的「切到 l2」按钮：`usage-monitor/switch_account.py` 对 herdr 窗格调 `statetrail switch --json`（从 herdr 的 `plugins.json`
   找程序），tmux 窗格照旧走 claude-tmux-sessions（usage-monitor `cabfd50`）。
-- 轨迹表头的下拉菜单（`1676fae`，用户 2026-10-26 要的）：点模型名、「/high」、账号名（后面跟着 ⇄），在那段字正下方弹出模型 / effort（带 ultracode
+- 轨迹表头的下拉菜单（`1676fae`，用户 2026-10-26 要的）：点模型名、effort（表头里是「Opus 5.5 high」的 high，2026-10-26 去掉了斜线、用一格空分开）、账号名（后面跟着 ⇄），在那段字正下方弹出模型 / effort（带 ultracode
   开关）/ 账号的列表。菜单由轨迹自己画：herdr 的 popup 没有位置参数，只能开在**当前看着的那个标签页**正中，不管是谁叫开的。
   模型和 effort 走 `/model` 选择器按 `s`（只改这个会话）：带参数的 `/model sonnet`、`/effort low` 会顺手写进 `settings.json` 当新会话默认，
   数字键也会；对话已缓存时还会问「Switch model?」，自动回车确认。换账号会按原启动参数重起，只改这个会话的模型 / effort 随之失效。
