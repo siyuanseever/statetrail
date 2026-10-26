@@ -357,6 +357,23 @@ fn main() {
         Some("menu") => picker::cmd_menu(),
         Some("pickrepo") => picker::cmd_pickrepo(&std::env::args().nth(2).unwrap_or_default()),
         Some("switch") => switch::cmd_switch(&std::env::args().skip(2).collect::<Vec<_>>()),
+        // 只改这个会话：statetrail set <窗格> model <opus|fable|sonnet|haiku> | effort <low…max> | ultracode <on|off>
+        Some("set") => {
+            let a: Vec<String> = std::env::args().skip(2).collect();
+            let r = match a.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+                [pane, "model", m] => switch::set_model(pane, Some(m), None),
+                [pane, "effort", e] => switch::set_model(pane, None, Some(e)),
+                [pane, "ultracode", v] => switch::set_ultracode(pane, *v == "on"),
+                _ => Err("usage: statetrail set <pane> model <name> | effort <level> | ultracode <on|off>".into()),
+            };
+            match r {
+                Ok(m) => println!("{m}"),
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+        }
         Some("version") => println!("statetrail {}", env!("CARGO_PKG_VERSION")),
         // 开发用：按 ⟳ 的规矩查一次额度（statetrail refresh-usage <配置目录> [force]）
         Some("refresh-usage") => {

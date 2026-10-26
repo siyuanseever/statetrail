@@ -86,3 +86,18 @@ Claude 的目录已经不在了，改在 {d} 打开	Claude's directory is gone; 
 按回车安装，点外面或 Ctrl-C 取消	Enter to install; click outside or Ctrl-C to cancel
 没装上，按回车关闭	Install failed; Enter to close
 先装上它，或者在配置里改这个按钮的命令。按回车关闭	Install it first, or change this button's command in the config. Enter to close
+正在换…	switching…
+Claude 正在工作或等你确认，等它停下再换	Claude is busy or waiting for you; try again when it stops
+没等到 /model 的选择框	the /model picker did not show up
+选择框里没找到 {m}	{m} not found in the picker
+选择框里没找到 effort	effort not found in the picker
+这个模型调不到 {e}	this model cannot go to {e}
+按了 s 没看到确认，请看一眼 Claude	pressed s but saw no confirmation; check Claude
+没看到 Claude 的回应，请看一眼	no reply from Claude; take a look
+模型换成 {v}，只改这个会话	model now {v}, this session only
+effort 换成 {v}，只改这个会话	effort now {v}, this session only
+ultracode 开	ultracode on
+ultracode 关	ultracode off
+ultracode 已开	ultracode on
+ultracode 已关	ultracode off
+下一条会重读整段对话	next reply re-reads the whole conversation

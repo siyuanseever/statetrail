@@ -497,6 +497,189 @@ pub fn switch_one(pane: &str, to: &Account, accts: &[Account], o: &Opts, log: &d
     )
 }
 
+// ---- 只改这个会话的模型、effort、ultracode ----------------------------------------------------
+// 带参数的 /model sonnet、/effort low 会顺手存成新会话的默认（写进 settings.json，两个账号共用那一份）；
+// 只有 /model 选择器里按 s 是「只用于这个会话」（2026-10-26 实测，Claude Code 2.1.310）。所以模型和 effort 都走选择器：
+// 上下键挪到要的模型，左右键调 effort，按 s。数字键会直接选中并存成默认，不能用。ultracode 本来就只管这个会话。
+
+pub const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+
+/// 往 Claude 输入框里打命令之前：空闲、没在等确认、输入框是空的。
+pub fn ready(pane: &str) -> Result<(), String> {
+    let lines = read(pane, false);
+    if busy(pane) || screen_state(&lines) != "idle" {
+        return Err(t("Claude 正在工作或等你确认，等它停下再换"));
+    }
+    match draft_text(&lines, &read(pane, true)) {
+        None => Err(t("认不出输入框，为防丢字没动")),
+        Some(d) if !d.is_empty() => {
+            let d: String = d.chars().take(20).collect();
+            Err(t("输入框里有没发出去的字（{d}…），没动").replace("{d}", &d))
+        }
+        _ => Ok(()),
+    }
+}
+
+fn visible(pane: &str) -> Vec<String> {
+    herdr::call("pane.read", json!({"pane_id": pane, "source": "visible"}))
+        .ok()
+        .and_then(|r| r["read"]["text"].as_str().map(str::to_owned))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// 等屏幕上出现某段字（最多 secs 秒）。
+fn wait_for(pane: &str, what: &str, secs: u64) -> bool {
+    let end = Instant::now() + Duration::from_secs(secs);
+    while Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(250));
+        if visible(pane).iter().any(|l| l.contains(what)) {
+            return true;
+        }
+    }
+    false
+}
+
+/// 最近几百行里，命令回显「❯ /model」的行号。
+fn echoes(pane: &str, cmd: &str) -> (Vec<String>, Vec<usize>) {
+    let lines: Vec<String> = herdr::call("pane.read", json!({"pane_id": pane, "source": "recent", "lines": 300}))
+        .ok()
+        .and_then(|r| r["read"]["text"].as_str().map(str::to_owned))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    let at = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.trim_start().strip_prefix('❯').is_some_and(|r| r.trim() == cmd))
+        .map(|(i, _)| i)
+        .collect();
+    (lines, at)
+}
+
+/// 等这条命令多出一次回显（before 是发之前数到的次数），返回它下面 Claude 的回应（「⎿  Set model to …」）。
+/// 屏幕上可能还留着上一次同样命令的回应，所以不能只找字。
+fn reply_to(pane: &str, cmd: &str, before: usize, secs: u64) -> Option<String> {
+    let end = Instant::now() + Duration::from_secs(secs);
+    while Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(250));
+        let (lines, at) = echoes(pane, cmd);
+        if at.len() > before
+            && let Some(&i) = at.last()
+            && let Some(l) = lines[i + 1..].iter().find(|l| l.contains('⎿'))
+        {
+            return Some(l.trim_start_matches(|c: char| c.is_whitespace() || c == '⎿').trim().to_owned());
+        }
+    }
+    None
+}
+
+/// 选择器里的模型行「   ❯ 5.  Haiku 5.5 ✔   Fastest…」→ (序号, 名字, 是不是光标所在)。
+fn model_row(line: &str) -> Option<(u32, String, bool)> {
+    let s = line.trim_start_matches(|c: char| c.is_whitespace() || c == '↑' || c == '↓');
+    let (cursor, s) = match s.strip_prefix('❯') {
+        Some(rest) => (true, rest.trim_start()),
+        None => (false, s),
+    };
+    let (num, rest) = s.split_once('.')?;
+    let n: u32 = num.parse().ok()?;
+    let name = rest.trim_start().split("  ").next()?.trim_end_matches(['✔', ' ']).to_owned();
+    Some((n, name, cursor))
+}
+
+/// 选择器底下那行「◐ Medium effort (default) ←/→ to adjust」→ "medium"。
+fn effort_now(lines: &[String]) -> Option<String> {
+    let l = lines.iter().find(|l| l.contains("←/→"))?;
+    let words: Vec<&str> = l.split_whitespace().collect();
+    let i = words.iter().position(|w| *w == "effort")?;
+    Some(words.get(i.checked_sub(1)?)?.to_lowercase())
+}
+
+/// 把这个会话换到 family（Opus / Fable / Sonnet / Haiku，取列表里最新的那个）和 / 或 effort，只用于这个会话。
+pub fn set_model(pane: &str, family: Option<&str>, effort: Option<&str>) -> Result<String, String> {
+    ready(pane)?;
+    let before = echoes(pane, "/model").1.len();
+    type_line(pane, "/model");
+    if !wait_for(pane, "Select model", 4) {
+        return Err(t("没等到 /model 的选择框"));
+    }
+    let give_up = |msg: String| {
+        keys(pane, &["esc"]);
+        Err(msg)
+    };
+    if let Some(f) = family {
+        let mut found = false;
+        for _ in 0..20 {
+            let rows: Vec<(u32, String, bool)> = visible(pane).iter().filter_map(|l| model_row(l)).collect();
+            let Some(cur) = rows.iter().find(|r| r.2).map(|r| r.0) else { break };
+            let Some(want) = rows.iter().find(|r| r.1.to_lowercase().starts_with(&f.to_lowercase())).map(|r| r.0) else {
+                break;
+            };
+            if cur == want {
+                found = true;
+                break;
+            }
+            keys(pane, &[if want > cur { "down" } else { "up" }]);
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        if !found {
+            return give_up(t("选择框里没找到 {m}").replace("{m}", f));
+        }
+    }
+    if let Some(e) = effort {
+        let want = EFFORTS.iter().position(|x| *x == e).unwrap_or(0);
+        let mut last = None;
+        loop {
+            let Some(now) = effort_now(&visible(pane)) else {
+                return give_up(t("选择框里没找到 effort"));
+            };
+            if now == e {
+                break;
+            }
+            if last.as_ref() == Some(&now) {
+                return give_up(t("这个模型调不到 {e}").replace("{e}", e)); // 按了没变：到头了
+            }
+            let at = EFFORTS.iter().position(|x| *x == now).unwrap_or(0);
+            keys(pane, &[if want > at { "right" } else { "left" }]);
+            std::thread::sleep(Duration::from_millis(200));
+            last = Some(now);
+        }
+    }
+    let _ = herdr::call("pane.send_text", json!({"pane_id": pane, "text": "s"}));
+    // 对话已经按原模型缓存过时，还会问一句「Switch model? 下一条要重读整段对话」：是你点的，默认第 1 项就是换，回车
+    let end = Instant::now() + Duration::from_secs(4);
+    let mut reread = false;
+    while Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(250));
+        let scr = visible(pane);
+        if scr.iter().any(|l| l.contains("Switch model?")) {
+            keys(pane, &["enter"]);
+            reread = true;
+            break;
+        }
+        if echoes(pane, "/model").1.len() > before {
+            break;
+        }
+    }
+    let msg = reply_to(pane, "/model", before, 4).ok_or_else(|| t("按了 s 没看到确认，请看一眼 Claude"))?;
+    Ok(if reread {
+        format!("{msg} · {}", t("下一条会重读整段对话"))
+    } else {
+        msg
+    })
+}
+
+pub fn set_ultracode(pane: &str, on: bool) -> Result<String, String> {
+    ready(pane)?;
+    let cmd = if on { "/effort ultracode on" } else { "/effort ultracode off" };
+    let before = echoes(pane, cmd).1.len();
+    type_line(pane, cmd);
+    reply_to(pane, cmd, before, 4).ok_or_else(|| t("没看到 Claude 的回应，请看一眼"))
+}
+
 // ---- 命令行 ---------------------------------------------------------------------
 
 pub fn cmd_switch(args: &[String]) {
@@ -608,6 +791,28 @@ mod tests {
         assert!(has_background(&v(&["x", "  ⏵⏵ auto mode on · 2 shells still running"])));
         assert!(has_background(&v(&["1 background task"])));
         assert!(!has_background(&v(&["  ⏵⏵ auto mode on (shift+tab to cycle) · ← 6 agents"])));
+    }
+
+    #[test]
+    fn picker_rows() {
+        assert_eq!(
+            model_row("   ❯ 5.  Haiku 5.5 ✔            Fastest"),
+            Some((5, "Haiku 5.5".into(), true))
+        );
+        assert_eq!(
+            model_row("     2.  Opus 5.5               For complex"),
+            Some((2, "Opus 5.5".into(), false))
+        );
+        assert_eq!(
+            model_row("   ↓ 10. Opus 4.8               Best"),
+            Some((10, "Opus 4.8".into(), false))
+        );
+        assert_eq!(model_row("   Select model"), None);
+        assert_eq!(
+            effort_now(&v(&["   ◐ Medium effort (default) ←/→ to adjust"])),
+            Some("medium".into())
+        );
+        assert_eq!(effort_now(&v(&["   ● xHigh effort ←/→ to adjust"])), Some("xhigh".into()));
     }
 
     #[test]

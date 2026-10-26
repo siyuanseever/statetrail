@@ -7,7 +7,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::i18n::t;
@@ -356,4 +356,49 @@ pub fn draw(f: &mut Frame, header: &[SLine], footer: &[SLine], v: &View, offset:
         list_top: top,
         footer_top,
     }
+}
+
+/// 表头里点模型 / effort / 账号弹出来的下拉菜单：画在点的那段字正下方（x, y 是框左上角），一项一行，当前的打 ✔。
+/// herdr 的 popup 只能开在屏幕正中，所以自己画在轨迹里。
+pub struct Menu {
+    pub x: u16,
+    pub y: u16,
+    pub items: Vec<(String, String, bool)>, // (交回去的 key, 显示的字, 是不是当前的)；key 为空是分隔线
+}
+
+/// 画下拉菜单，返回每一项的 (行, 列起, 列止, key)。
+pub fn draw_menu(f: &mut Frame, m: &Menu) -> Vec<(u16, u16, u16, String)> {
+    let c = colors();
+    let area = f.area();
+    let inner = m.items.iter().map(|(_, l, _)| l.width() + 4).max().unwrap_or(4) as u16;
+    let w = (inner + 2).min(area.width);
+    let h = (m.items.len() as u16 + 2).min(area.height);
+    let x = m.x.min(area.width.saturating_sub(w));
+    let y = m.y.min(area.height.saturating_sub(h));
+    let rect = Rect { x, y, width: w, height: h };
+    f.render_widget(Clear, rect);
+    let block = Block::default().borders(Borders::ALL).border_style(Style::default().fg(c.accent));
+    let lines: Vec<Line> = m
+        .items
+        .iter()
+        .map(|(key, label, cur)| {
+            if key.is_empty() {
+                Line::from(Span::styled("─".repeat(inner as usize), Style::default().fg(c.dim)))
+            } else if *cur {
+                Line::from(Span::styled(
+                    format!(" {label} ✔"),
+                    Style::default().fg(c.accent).add_modifier(Modifier::BOLD),
+                ))
+            } else {
+                Line::from(format!(" {label}"))
+            }
+        })
+        .collect();
+    f.render_widget(Paragraph::new(lines).block(block), rect);
+    m.items
+        .iter()
+        .enumerate()
+        .filter(|(i, (k, _, _))| !k.is_empty() && y + 1 + (*i as u16) < y + h - 1)
+        .map(|(i, (k, _, _))| (y + 1 + i as u16, x + 1, x + w - 1, k.clone()))
+        .collect()
 }

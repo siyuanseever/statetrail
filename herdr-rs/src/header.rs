@@ -14,7 +14,7 @@ pub const SLOT: usize = 3; // 图标按钮占 3 格（空格 + 图标 + 空格�
 pub const GAP: usize = 1;
 
 /// 图标三档：(nerd, unicode, text)。文字档的字跟着界面语言。
-const ICONS: [(&str, &str, &str, &str); 14] = [
+const ICONS: [(&str, &str, &str, &str); 15] = [
     ("narrow", "\u{f101}", "»", ">>"),
     ("wide", "\u{f100}", "«", "<<"),
     ("bottom", "\u{f103}", "⇊", "End"),
@@ -29,6 +29,7 @@ const ICONS: [(&str, &str, &str, &str); 14] = [
     ("more", "\u{f141}", "⋯", "..."),
     ("shell", "\u{f120}", "›_", ""),
     ("monitor", "\u{f201}", "▂▅", ""), // 折线图（nf-fa-line_chart）：btop
+    ("switch", "\u{f0ec}", "⇄", "<>"), // 账号后面：点这一行换账号、模型、effort、ultracode
 ];
 
 static TIER: OnceLock<usize> = OnceLock::new();
@@ -200,14 +201,18 @@ pub fn wide(width: usize, i: &Info) -> (Vec<SLine>, usize) {
         head_line.push((head, None));
     }
     let mut lines = vec![buttons_line(&wide_buttons(), i.usage, true)];
+    let acct = claude::current_account(i.cfg_dir);
     lines.extend(render::status_lines(
         width,
         i.model,
         i.ctx,
         i.usage,
-        &claude::current_account(i.cfg_dir),
+        &acct,
         claude::auto_compact_at(),
     ));
+    if !i.model.is_empty() || !acct.is_empty() {
+        lines[1].push((format!(" {}", icon("switch")), Some(c.accent))); // 模型 · 账号那一行
+    }
     lines.push(render::lead(head_line, i.up_tag, i.slot)); // 「N 轮」那一行放在最后，▲ 在它最前面
     let n = lines.len();
     (lines, n)
@@ -238,7 +243,9 @@ pub fn narrow(width: usize, i: &Info) -> Vec<SLine> {
     }
     let acct = claude::short_account(i.cfg_dir);
     if !acct.is_empty() {
-        fields.push((1, tagged("account", &acct)));
+        let mut field = tagged("account", &acct);
+        field.push((format!(" {}", icon("switch")), Some(c.accent)));
+        fields.push((1, field));
     }
     let lab_w = ["ctx", "5h", "7d"].iter().map(|x| icon(x).width()).max().unwrap_or(0);
     let pad = |name: &str| -> String {
@@ -274,4 +281,33 @@ pub fn narrow(width: usize, i: &Info) -> Vec<SLine> {
 
 pub fn plain_lines(lines: &[SLine]) -> String {
     lines.iter().map(|l| render::plain(l)).collect::<Vec<_>>().join("\n")
+}
+
+/// 表头里能点开下拉菜单的几段字：(第几行，从 0 数, 列起, 列止, 哪种)。列按显示宽度、从表头文字的第一列算起。
+/// 模型名 → "model"，「/high」→ "effort"，账号名到行尾（连 ⇄）→ "acct"。宽版、窄版都按字找（窄版的模型名去了空格、effort 只留两个字）。
+pub fn hot_spots(lines: &[SLine], model: &str, accts: &[String]) -> Vec<(usize, usize, usize, &'static str)> {
+    let (name, _) = model.split_once('/').unwrap_or((model, ""));
+    let mut out = Vec::new();
+    for (i, l) in lines.iter().enumerate().skip(1) {
+        let p = render::plain(l);
+        if let Some(b) = accts.iter().filter(|a| !a.is_empty()).find_map(|a| p.find(a.as_str())) {
+            out.push((i, p[..b].width(), p.width(), "acct"));
+        }
+        if name.is_empty() {
+            continue;
+        }
+        for cand in [name.to_owned(), name.replace(' ', "")] {
+            if let Some(b) = p.find(&cand) {
+                let start = p[..b].width();
+                out.push((i, start, start + cand.width(), "model"));
+                let rest = &p[b + cand.len()..];
+                if rest.starts_with('/') {
+                    let eff = rest.split(' ').next().unwrap_or("");
+                    out.push((i, start + cand.width(), start + cand.width() + eff.width(), "effort"));
+                }
+                break;
+            }
+        }
+    }
+    out
 }
