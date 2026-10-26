@@ -96,6 +96,8 @@ herdr plugin install siyuanseever/statetrail/herdr
 
 ## 本机从 tmux 迁到 herdr 之后补的（2026-10-26）
 
+- 默认打开窄版（细条，19 列）：用户原话「我们用细条版本作为默认版本吧」。配置 `default_mode = "wide"` 才开宽版；Python 版不动，仍默认宽版。
+
 来自迁移会话留下的交接（`docs/HANDOFF-2026-10-26-herdr.md`，已并进这里、删掉）。本机现在装的就是这个目录：
 `herdr plugin link ~/projects/statetrail/herdr-rs`。link 的目录 `herdr plugin update` 管不到，有新提交要本地
 `cargo build --release`，再按 manifest 注释用 `bin/.new` + `mv` 换掉程序；开着的轨迹会自己原地重启。

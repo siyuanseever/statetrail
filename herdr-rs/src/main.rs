@@ -162,7 +162,7 @@ pub fn config() -> Config {
         .unwrap_or_default();
     Config {
         auto_open: table.get("auto_open").and_then(toml::Value::as_bool).unwrap_or(true),
-        narrow_default: table.get("default_mode").and_then(toml::Value::as_str) == Some("narrow"),
+        narrow_default: table.get("default_mode").and_then(toml::Value::as_str) != Some("wide"), // 2026-10-26 起默认窄版（用户定的）；Python 版仍默认宽版
         width: table
             .get("width")
             .and_then(toml::Value::as_float)
