@@ -367,7 +367,28 @@ pub struct Menu {
 }
 
 /// 画下拉菜单，返回每一项的 (行, 列起, 列止, key)。
-pub fn draw_menu(f: &mut Frame, m: &Menu) -> Vec<(u16, u16, u16, String)> {
+/// 表头里能点的一段字（第 y 行、x0..x1 列）：平时下划线，鼠标停上去反色
+pub fn mark(f: &mut Frame, y: u16, x0: u16, x1: u16, lit: bool) {
+    let area = f.area();
+    let style = if lit {
+        Style::default().add_modifier(Modifier::REVERSED)
+    } else {
+        Style::default().add_modifier(Modifier::UNDERLINED)
+    };
+    if y >= area.height {
+        return;
+    }
+    // 尾巴上的空格不画线（账号那一段一直算到行尾）
+    let mut end = x1.min(area.width);
+    while end > x0 && f.buffer_mut()[(end - 1, y)].symbol().trim().is_empty() {
+        end -= 1;
+    }
+    for x in x0..end {
+        f.buffer_mut()[(x, y)].set_style(style);
+    }
+}
+
+pub fn draw_menu(f: &mut Frame, m: &Menu, hover: Option<(u16, u16)>) -> Vec<(u16, u16, u16, String)> {
     let c = colors();
     let area = f.area();
     let inner = m.items.iter().map(|(_, l, _)| l.width() + 4).max().unwrap_or(4) as u16;
@@ -395,6 +416,15 @@ pub fn draw_menu(f: &mut Frame, m: &Menu) -> Vec<(u16, u16, u16, String)> {
         })
         .collect();
     f.render_widget(Paragraph::new(lines).block(block), rect);
+    // 鼠标停着的那一项整行反色
+    if let Some((hy, hx)) = hover {
+        let row = hy.wrapping_sub(y + 1) as usize;
+        if hy > y && hy < y + h - 1 && hx > x && hx < x + w - 1 && m.items.get(row).is_some_and(|it| !it.0.is_empty()) {
+            for cx in x + 1..x + w - 1 {
+                f.buffer_mut()[(cx, hy)].set_style(Style::default().add_modifier(Modifier::REVERSED));
+            }
+        }
+    }
     m.items
         .iter()
         .enumerate()

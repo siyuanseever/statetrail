@@ -107,6 +107,7 @@ struct Trail {
     hot: Vec<(usize, usize, usize, &'static str)>, // 表头里点了弹下拉菜单的几段字（header::hot_spots）
     menu: Option<ui::Menu>,                        // 开着的下拉菜单
     menu_hits: Vec<(u16, u16, u16, String)>,
+    hover: Option<(u16, u16)>, // 鼠标停在哪（行, 列）：能点的字、菜单项停上去就反色
     mc: (Option<u64>, (String, String)), // (对话记录大小, (模型, 上下文))：没变就不重读尾巴
     // 刚换了模型 / effort：(换之前对话记录里的模型, 换成的)。对话记录要等下一条回复才写新模型，在那之前表头先显示换成的
     model_now: Option<(String, String)>,
@@ -281,6 +282,22 @@ impl Trail {
     }
 
     /// 点表头：第 1 行是按钮；宽版「N 轮」那一行什么都不做；模型、柱子那几行点了去查一次真实额度。
+    /// 鼠标底下是哪一段能点的字 / 哪一项菜单；没变就不用重画
+    fn hover_key(&self, (row, col): (u16, u16)) -> Option<(u16, u16)> {
+        if self.menu.is_some() {
+            return self
+                .menu_hits
+                .iter()
+                .find(|(r, a, b, _)| *r == row && (*a..*b).contains(&col))
+                .map(|h| (h.0, h.1));
+        }
+        let col = (col as usize).checked_sub(2)?; // 表头从第 3 列画起
+        self.hot
+            .iter()
+            .find(|(i, a, b, _)| *i == row as usize && (*a..*b).contains(&col))
+            .map(|h| (h.0 as u16, h.1 as u16))
+    }
+
     fn header_click(&mut self, ln: usize, col: usize, width: u16, tx: &Sender<Msg>) {
         let narrow = width < WIDE_MIN;
         if self.up_at.is_some_and(|(l, slot)| l == ln && col <= slot + 1) {
@@ -1050,6 +1067,7 @@ pub fn run(cfg: Config) {
         hot: Vec::new(),
         menu: None,
         menu_hits: Vec::new(),
+        hover: None,
         mc: (None, (String::new(), String::new())),
         model_now: None,
         last_kick: None,
@@ -1240,8 +1258,14 @@ fn run_loop(
             let mut menu_hits = Vec::new();
             term.draw(|f| {
                 drawn = Some(ui::draw(f, &head, &footer, &view, s.offset));
+                // 能点的字：平时加下划线，鼠标停上去反色（菜单开着时只亮菜单项）
+                let on = if s.menu.is_none() { s.hover.and_then(|h| s.hover_key(h)) } else { None };
+                for &(i, a, b, _) in &s.hot {
+                    let lit = on == Some((i as u16, a as u16));
+                    ui::mark(f, i as u16, (a + 2) as u16, (b + 2) as u16, lit);
+                }
                 if let Some(m) = &s.menu {
-                    menu_hits = ui::draw_menu(f, m);
+                    menu_hits = ui::draw_menu(f, m, s.hover);
                 }
             })?;
             s.menu_hits = menu_hits;
@@ -1285,6 +1309,14 @@ fn run_loop(
                 }
                 m.kind
             } {
+                MouseEventKind::Moved => {
+                    let was = s.hover.and_then(|h| s.hover_key(h));
+                    s.hover = Some((m.row, m.column));
+                    if s.hover_key((m.row, m.column)) == was {
+                        redraw = false;
+                        continue;
+                    }
+                }
                 MouseEventKind::ScrollUp => {
                     s.offset = s.offset.saturating_sub(WHEEL);
                     s.follow = false;
