@@ -40,8 +40,6 @@ enum Msg {
     Jumped(String, String),            // (轮次 id, 结果)
     Wake,                              // 后台查完额度了：重画
     PluginTab(String, String, String), // (插件, 动作, 它开出来的标签页)
-    ModelNow(String),                  // 刚从表头换了模型 / effort：「Opus 5.5/high」
-    Ultracode(bool),                   // 刚从表头开 / 关了 ultracode
 }
 
 fn sock_of(pane: &str) -> PathBuf {
@@ -105,14 +103,12 @@ struct Trail {
     hits: Vec<(u16, Item)>,
     header_len: u16,
     head_ln: usize,                                // 宽版「N 轮」那一行（点它什么都不做）
-    hot: Vec<(usize, usize, usize, &'static str)>, // 表头里点了弹下拉菜单的几段字（header::hot_spots）
+    hot: Vec<(usize, usize, usize)>, // 表头里点了弹账号菜单的那段字（header::hot_spots）
     menu: Option<ui::Menu>,                        // 开着的下拉菜单
     menu_hits: Vec<(u16, u16, u16, String)>,
     hover: Option<(u16, u16)>, // 鼠标停在哪（行, 列）：能点的字、菜单项停上去就亮起来
     mc: (Option<u64>, (String, String)), // (对话记录大小, (模型, 上下文))：没变就不重读尾巴
     // 刚换了模型 / effort：(换之前对话记录里的模型, 换成的)。对话记录要等下一条回复才写新模型，在那之前表头先显示换成的
-    model_now: Option<(String, String)>,
-    ultracode: bool, // 轨迹上次把 ultracode 设成了什么。Claude Code 不把它写进任何文件，只能自己记；Claude 重起就回到关
     last_kick: Option<Instant>,
     view: (usize, usize, usize),     // (列表上面还有几轮, 下面还有几轮, 露出来几项)
     up_at: Option<(usize, usize)>,   // 表头里的 ▲：(第几行, 占到第几列)
@@ -182,8 +178,6 @@ impl Trail {
             if self.no_claude_since.take().is_some() && self.sid.is_some() {
                 // Claude 退出又起来了（比如换账号 --resume 同一个会话）：会话 id 可能没变，配置目录要重认
                 self.cfg_dir = claude::config_dir_of_pid(herdr::claude_pid(&self.target));
-                self.model_now = None;
-                self.ultracode = false;
             }
         } else if self.no_claude_since.is_none() {
             self.no_claude_since = Some(Instant::now());
@@ -220,13 +214,7 @@ impl Trail {
         if size != self.mc.0 {
             self.mc = (size, claude::model_ctx(&tr.path));
         }
-        match &self.model_now {
-            Some((was, now)) if *was == self.mc.1.0 => (now.clone(), self.mc.1.1.clone()),
-            _ => {
-                self.model_now = None;
-                self.mc.1.clone()
-            }
-        }
+        self.mc.1.clone()
     }
 
     /// （live_usage 打开时）额度旧了（默认 30 分钟）就在后台线程里去查一次；claude::refresh_usage 自己还会再节流一道，
@@ -297,7 +285,7 @@ impl Trail {
         let col = (col as usize).checked_sub(2)?; // 表头从第 3 列画起
         self.hot
             .iter()
-            .find(|(i, a, b, _)| *i == row as usize && (*a..*b).contains(&col))
+            .find(|(i, a, b)| *i == row as usize && (*a..*b).contains(&col))
             .map(|h| (h.0 as u16, h.1 as u16))
     }
 
@@ -312,12 +300,12 @@ impl Trail {
             if let Some(a) = header::button_at(&buttons, col).map(str::to_owned) {
                 self.act(&a, width, tx);
             }
-        } else if let Some(&(i, start, _, kind)) = self
+        } else if let Some(&(i, start, _)) = self
             .hot
             .iter()
-            .find(|(i, a, b, _)| *i + 1 == ln && (*a..*b).contains(&col.saturating_sub(1)))
+            .find(|(i, a, b)| *i + 1 == ln && (*a..*b).contains(&col.saturating_sub(1)))
         {
-            self.open_menu(kind, (start + 2) as u16, (i + 1) as u16);
+            self.open_menu((start + 2) as u16, (i + 1) as u16);
         } else if narrow || ln != self.head_ln {
             self.kick_usage(true, tx);
         }
@@ -735,102 +723,42 @@ impl Trail {
 
     /// ⋯：用 herdr 的 popup 列出所有插件的所有 action（statetrail menu），选中的那一条经 socket 送回来再调。
     /// popup 开着时整个会话只认它，所以不在 popup 里直接调：等它关了，这边再调。
-    /// 点了表头的模型名 / effort / 账号：在那段字正下方（x, y）画一个下拉菜单。effort 那一份最后带一行 ultracode 开关；
-    /// 表头上没显示 effort 时（对话记录里还没有），模型那一份把 effort 也带上。
-    fn open_menu(&mut self, kind: &str, x: u16, y: u16) {
-        let (model, _) = self.model_ctx();
-        let (name, effort) = model.split_once('/').unwrap_or((model.as_str(), ""));
-        let item = |k: &str, v: &str, label: String, cur: bool| (format!("{k} {v}"), label, cur);
-        let efforts = || {
-            let mut v: Vec<(String, String, bool)> = switch::EFFORTS
-                .iter()
-                .map(|e| item("effort", e, (*e).to_owned(), effort == *e))
-                .collect();
-            v.push((String::new(), String::new(), false));
-            // 只放一行：点了会切到的那一头（用户 2026-10-27：「只显示要切换的 action 对应的就可以了」）
-            v.push(if self.ultracode {
-                item("ultracode", "off", t("ultracode → 关"), false)
-            } else {
-                item("ultracode", "on", t("ultracode → 开"), false)
-            });
-            v
-        };
-        let items = match kind {
-            "acct" => switch::accounts()
-                .iter()
-                .map(|a| item("acct", &a.name, a.name.clone(), a.dir == self.cfg_dir))
-                .collect(),
-            "model" => {
-                let mut v: Vec<_> = ["Opus", "Fable", "Sonnet", "Haiku"]
-                    .iter()
-                    .map(|m| item("model", &m.to_lowercase(), (*m).to_owned(), name.replace(' ', "").starts_with(m)))
-                    .collect();
-                if effort.is_empty() {
-                    v.push((String::new(), String::new(), false));
-                    v.extend(efforts());
-                }
-                v
-            }
-            _ => efforts(),
-        };
+    /// 点了表头的账号名（连 ⇄）：在那段字正下方（x, y）画一个下拉菜单，列出所有账号。
+    /// 模型、effort、ultracode 只显示不能点：只改这个会话得替你在 Claude 里开 /model 选择框按键，屏幕会跟着动，
+    /// Claude 在跑时还按不了（用户 2026-10-27：「如果我们做的体验不好就不要做可交互了」）。
+    fn open_menu(&mut self, x: u16, y: u16) {
+        let items = switch::accounts()
+            .iter()
+            .map(|a| (format!("acct {}", a.name), a.name.clone(), a.dir == self.cfg_dir))
+            .collect();
         self.menu = Some(ui::Menu { x, y, items });
     }
 
-    /// 换账号、模型、effort、ultracode：要等 Claude 退出重起或者操作 /model 选择框，几秒到几十秒，放到后台线程里做，
-    /// 进展和结果在表头闪出来。
+    /// 换账号：要等 Claude 退出重起，几秒到几十秒，放到后台线程里做，进展和结果在表头闪出来。
     fn apply_setting(&mut self, kind: &str, value: &str, tx: &Sender<Msg>) {
-        let (target, kind, value, tx) = (self.target.clone(), kind.to_owned(), value.to_owned(), tx.clone());
-        let cur_effort = self.model_ctx().0.split_once('/').map(|x| x.1.to_owned()).unwrap_or_default();
+        if kind != "acct" {
+            return;
+        }
+        let (target, value, tx) = (self.target.clone(), value.to_owned(), tx.clone());
         self.say(t("正在换…"), Duration::from_secs(30));
         std::thread::spawn(move || {
             let say = |m: String, secs: u64| {
                 let _ = tx.send(Msg::Flash(m, Duration::from_secs(secs)));
             };
-            let r = match kind.as_str() {
-                "acct" => {
-                    let accts = switch::accounts();
-                    match accts.iter().find(|a| a.name == value) {
-                        Some(to) => {
-                            let opts = switch::Opts {
-                                dry: false,
-                                stop_bg: false,
-                            };
-                            let (st, msg) = switch::switch_one(&target, to, &accts, &opts, &|m| say(m, 60), false);
-                            if st == switch::State::Ok { Ok(msg) } else { Err(msg) }
-                        }
-                        None => Err(value.clone()),
-                    }
+            let accts = switch::accounts();
+            let r = match accts.iter().find(|a| a.name == value) {
+                Some(to) => {
+                    let opts = switch::Opts {
+                        dry: false,
+                        stop_bg: false,
+                    };
+                    let (st, msg) = switch::switch_one(&target, to, &accts, &opts, &|m| say(m, 60), false);
+                    if st == switch::State::Ok { Ok(msg) } else { Err(msg) }
                 }
-                "model" => switch::set_model(&target, Some(&value), None),
-                "effort" => switch::set_model(&target, None, Some(&value)),
-                "ultracode" => switch::set_ultracode(&target, value == "on"),
-                _ => return,
-            };
-            // Claude 的原话太长，表头放不下：成功时说一句短的
-            let ok = match kind.as_str() {
-                "model" => t("模型换成 {v}，只改这个会话").replace("{v}", &value),
-                "effort" => t("effort 换成 {v}，只改这个会话").replace("{v}", &value),
-                "ultracode" if value == "on" => t("ultracode 已开"),
-                "ultracode" => t("ultracode 已关"),
-                _ => String::new(),
-            };
-            if kind == "ultracode" && r.is_ok() {
-                let _ = tx.send(Msg::Ultracode(value == "on"));
-            }
-            if matches!(kind.as_str(), "model" | "effort")
-                && let Ok(m) = &r
-                && let Some(now) = model_from_reply(m, if kind == "effort" { &value } else { &cur_effort })
-            {
-                let _ = tx.send(Msg::ModelNow(now));
-            }
-            let reread = t("下一条会重读整段对话");
-            let ok = if !ok.is_empty() && r.as_ref().is_ok_and(|m| m.ends_with(&reread)) {
-                format!("{ok} · {reread}")
-            } else {
-                ok
+                None => Err(value.clone()),
             };
             match r {
-                Ok(m) => say(if ok.is_empty() { m } else { ok }, 8),
+                Ok(m) => say(m, 8),
                 Err(m) => say(m, 10),
             }
         });
@@ -957,15 +885,6 @@ impl Trail {
     }
 }
 
-/// Claude 对 /model 的回应「Set model to Opus 5.5 for this session only with high effort」→「Opus 5.5/high」。
-/// 没说 effort（没变，或者是这个模型的默认档）就用 effort。
-fn model_from_reply(reply: &str, effort: &str) -> Option<String> {
-    let rest = reply.strip_prefix("Set model to ")?;
-    let (name, tail) = rest.split_once(" for this session only")?;
-    let e = tail.strip_prefix(" with ").and_then(|x| x.split(' ').next()).unwrap_or(effort);
-    Some(if e.is_empty() { name.to_owned() } else { format!("{name}/{e}") })
-}
-
 /// 工具没装时工具窗格里跑的：说找不到，给出安装命令。默认按钮的几个工具 Homebrew 里都有同名的包，有 brew 就回车直接装、
 /// 装完接着打开；别的只说找不到，回车关掉。
 fn install_prompt(prog: &str, cmd: &str) -> String {
@@ -1081,8 +1000,6 @@ pub fn run(cfg: Config) {
         menu_hits: Vec::new(),
         hover: None,
         mc: (None, (String::new(), String::new())),
-        model_now: None,
-        ultracode: false,
         last_kick: None,
         view: (0, 0, 0),
         up_at: None,
@@ -1247,7 +1164,7 @@ fn run_loop(
                 lines
             };
             let accts = [claude::current_account(&s.cfg_dir), claude::short_account(&s.cfg_dir)];
-            s.hot = header::hot_spots(&head, &model, &accts);
+            s.hot = header::hot_spots(&head, &accts);
             s.up_at = (slot > 0 && counts.0 > 0).then_some((head.len(), slot));
             // 底部：宽版一行按钮，▼ 在行首；窄版三个按钮就占满了，▼ 在第二行（插件那一行）
             let down_tag = tag("▼", counts.1);
@@ -1273,7 +1190,7 @@ fn run_loop(
                 drawn = Some(ui::draw(f, &head, &footer, &view, s.offset));
                 // 能点的字：平时垫底色，鼠标停上去换强调色底（菜单开着时只亮菜单项）
                 let on = if s.menu.is_none() { s.hover.and_then(|h| s.hover_key(h)) } else { None };
-                for &(i, a, b, _) in &s.hot {
+                for &(i, a, b) in &s.hot {
                     let lit = on == Some((i as u16, a as u16));
                     ui::mark(f, i as u16, (a + 2) as u16, (b + 2) as u16, lit);
                 }
@@ -1437,19 +1354,12 @@ fn run_loop(
                     // statetrail switch 换完账号：会话 id 没变，按新进程重认配置目录（账号、额度跟着变）
                     ["rescan"] => {
                         s.cfg_dir = claude::config_dir_of_pid(herdr::claude_pid(&s.target));
-                        s.model_now = None; // 重起的 Claude 按原来的启动参数起，只改这个会话的模型 / effort 没了
-                        s.ultracode = false;
                     }
                     _ => {}
                 }
             }
             Ok(Msg::Flash(m, d)) => s.say(m, d),
             Ok(Msg::Wake) => {}
-            Ok(Msg::Ultracode(on)) => s.ultracode = on,
-            Ok(Msg::ModelNow(m)) => {
-                let was = s.mc.1.0.clone();
-                s.model_now = Some((was, m));
-            }
             Ok(Msg::PluginTab(plugin, action, tab)) => {
                 s.plugin_tabs.insert((plugin, action), tab);
                 redraw = false;
@@ -1513,24 +1423,6 @@ fn run_loop(
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn model_reply() {
-        let f = super::model_from_reply;
-        assert_eq!(
-            f("Set model to Opus 5.5 for this session only with high effort", "low").as_deref(),
-            Some("Opus 5.5/high")
-        );
-        assert_eq!(
-            f("Set model to Opus 5.5 for this session only", "medium").as_deref(),
-            Some("Opus 5.5/medium")
-        );
-        assert_eq!(
-            f("Set model to Opus 5.5 for this session only · next reply re-reads", "").as_deref(),
-            Some("Opus 5.5")
-        );
-        assert_eq!(f("Model 'x' not found", "high"), None);
-    }
-
     #[test]
     fn install_prompt_is_valid_sh() {
         for prog in ["lazygit", "nosuchtool"] {

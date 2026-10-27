@@ -105,7 +105,9 @@ herdr plugin install siyuanseever/statetrail/herdr
 - 窄版表头 effort 单独一行（用户原话「effort 单独一行」）：以前是「Opus5.5 hi」挤一行、effort 只留两个字；现在模型名一行、下一行是 effort 全名，和模型名对齐，两段都还能点开下拉菜单。
 - 窄版 effort 那一行自带图标（仪表盘，nf-fa-tachometer；unicode 档「◔」），不再用空格对齐模型名（用户原话「model 和 effort 能不能分别给一个 icon 呀，现在 effort 前面是空的，感觉不协调」）。
 - 窄版账号写完整用户名（siyuan.l / siyuan.l2），不再只留和别的账号不一样的那截（用户原话「账号不应该显示用户名吗？l 是简称吧」）；放不下 15 列才退回那截。
-- effort 菜单里 ultracode 只放一行，写点了会切到的那一头（「ultracode → 开」或「→ 关」；用户原话「只显示要切换的 action 对应的就可以了」）。Claude Code 不把 ultracode 开关写进任何文件（f3ce2aa4 那次查过 settings、claude.json、对话记录），所以轨迹只记自己上次设成了什么，Claude 重起（含换账号）就当回到关。用户在 Claude 里自己敲 /effort ultracode 时轨迹不知道，这时显示的那头可能是现状，点了也只是再设一遍，不会弄坏。
+- ~~effort 菜单里 ultracode 只放一行~~（`c027c8f`），当天就随下一条一起撤了。
+- **2026-10-27 起模型、effort、ultracode 只显示，不能点**，表头里能点的只剩账号（连 ⇄）。用户原话「我切换模型咋没反应呢」「有反应之后他一直在滚动 conversation 历史」「如果我们做的体验不好就不要做可交互了」。原因：只改这个会话的模型，只有 Claude 的 /model 选择框能做到（带参数的 `/model sonnet` 会存成新会话默认，两个账号共用），轨迹只能替用户打 /model、按 ↑↓←→、按 s，屏幕跟着动；Claude 在跑时还按不了，窄版当时只画一个「!」，看着像没反应。`statetrail set` 命令行还留着（`switch::set_model` / `set_ultracode`），轨迹不再调。
+- 窄版的提示（换账号的进展、失败原因）按宽度折到按钮下面、最多三行，不再只画一个「!」。
 
 来自迁移会话留下的交接（`docs/HANDOFF-2026-10-26-herdr.md`，已并进这里、删掉）。本机现在装的就是这个目录：
 `herdr plugin link ~/projects/statetrail/herdr-rs`。link 的目录 `herdr plugin update` 管不到，有新提交要本地

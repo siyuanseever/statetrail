@@ -3,7 +3,7 @@
 
 use std::path::Path;
 use std::sync::OnceLock;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::claude::{self, Usage};
 use crate::i18n::t;
@@ -30,7 +30,7 @@ const ICONS: [(&str, &str, &str, &str); 16] = [
     ("more", "\u{f141}", "⋯", "..."),
     ("shell", "\u{f120}", "›_", ""),
     ("monitor", "\u{f201}", "▂▅", ""), // 折线图（nf-fa-line_chart）：给自己配的监视器类按钮用
-    ("switch", "\u{f0ec}", "⇄", "<>"), // 账号后面：点这一行换账号、模型、effort、ultracode
+    ("switch", "\u{f0ec}", "⇄", "<>"), // 账号后面：点账号换账号（模型、effort 只显示）
 ];
 
 static TIER: OnceLock<usize> = OnceLock::new();
@@ -203,7 +203,7 @@ pub fn wide(width: usize, i: &Info) -> (Vec<SLine>, usize) {
     }
     let mut lines = vec![buttons_line(&wide_buttons(), i.usage, true)];
     let acct = claude::current_account(i.cfg_dir);
-    // 模型名和 effort 各是一个按钮，中间空一格分开（Opus 5.5 high），斜线就不要了
+    // 模型名和 effort 中间空一格分开（Opus 5.5 high），斜线就不要了；只显示不能点
     let model = i.model.replacen('/', " ", 1);
     lines.extend(render::status_lines(
         width,
@@ -225,18 +225,29 @@ pub fn wide(width: usize, i: &Info) -> (Vec<SLine>, usize) {
 pub fn narrow(width: usize, i: &Info) -> Vec<SLine> {
     let c = colors();
     let room = 4.max(width.saturating_sub(2));
-    let mut first = buttons_line(&narrow_buttons(), None, false);
-    if i.flash.is_some() {
-        first.push((" !".into(), Some(c.warn)));
-    }
+    let first = buttons_line(&narrow_buttons(), None, false);
     let mut lines = vec![first];
+    // 提示原文按宽度折到按钮下面，最多三行（以前只画一个「!」，看不出为什么没反应）
+    if let Some(msg) = i.flash {
+        let mut row = String::new();
+        let mut rows = Vec::new();
+        for ch in msg.chars() {
+            if (row.width() + ch.width().unwrap_or(0)) > room {
+                rows.push(std::mem::take(&mut row));
+            }
+            row.push(ch);
+        }
+        rows.push(row);
+        rows.truncate(3);
+        lines.extend(rows.into_iter().map(|r| vec![(r.trim().to_owned(), Some(c.warn))]));
+    }
     let tagged = |name: &str, text: &str| -> SLine {
         let ic = icon(name);
         vec![(if ic.is_empty() { text.to_owned() } else { format!("{ic} {text}") }, Some(c.grey))]
     };
     let mut fields: Vec<(u8, SLine)> = Vec::new();
     if !i.model.is_empty() {
-        // `Opus 5.5/high` → 一行 `Opus5.5`、下一行 `high`：两段各是一个按钮，effort 单独一行、自带图标（用户定的）
+        // `Opus 5.5/high` → 一行 `Opus5.5`、下一行 `high`：effort 单独一行、自带图标（用户定的）；只显示不能点
         let (name, effort) = i.model.split_once('/').unwrap_or((i.model, ""));
         fields.push((2, tagged("model", &name.replace(' ', ""))));
         if !effort.is_empty() {
@@ -291,38 +302,13 @@ pub fn plain_lines(lines: &[SLine]) -> String {
     lines.iter().map(|l| render::plain(l)).collect::<Vec<_>>().join("\n")
 }
 
-/// 表头里能点开下拉菜单的几段字：(第几行，从 0 数, 列起, 列止, 哪种)。列按显示宽度、从表头文字的第一列算起。
-/// 模型名 → "model"，后面隔一格的「high」→ "effort"，账号名到行尾（连 ⇄）→ "acct"。宽版、窄版都按字找
-/// （窄版的模型名去了空格，effort 单独一行：整行去掉空白是「effort 图标 + effort」就算）。
-pub fn hot_spots(lines: &[SLine], model: &str, accts: &[String]) -> Vec<(usize, usize, usize, &'static str)> {
-    let (name, effort) = model.split_once('/').unwrap_or((model, ""));
+/// 表头里点了弹账号菜单的那段字：(第几行，从 0 数, 列起, 列止)。账号名到行尾（连 ⇄），按字找，宽版、窄版都一样。
+pub fn hot_spots(lines: &[SLine], accts: &[String]) -> Vec<(usize, usize, usize)> {
     let mut out = Vec::new();
     for (i, l) in lines.iter().enumerate().skip(1) {
         let p = render::plain(l);
         if let Some(b) = accts.iter().filter(|a| !a.is_empty()).find_map(|a| p.find(a.as_str())) {
-            out.push((i, p[..b].width(), p.width(), "acct"));
-        }
-        if name.is_empty() {
-            continue;
-        }
-        if !effort.is_empty() && p.trim_end().ends_with(effort) && p.trim().strip_suffix(effort).is_some_and(|ic| ic.trim() == icon("effort")) {
-            let at = p.trim_end().width() - effort.width();
-            out.push((i, at, at + effort.width(), "effort"));
-            continue;
-        }
-        for cand in [name.to_owned(), name.replace(' ', "")] {
-            if let Some(b) = p.find(&cand) {
-                let start = p[..b].width();
-                out.push((i, start, start + cand.width(), "model"));
-                let rest = &p[b + cand.len()..];
-                // 只认 effort 的全名，免得把后面的「·」当成 effort
-                let eff = rest.strip_prefix(' ').and_then(|r| r.split(' ').next()).unwrap_or("");
-                if !effort.is_empty() && eff == effort {
-                    let at = start + cand.width() + 1;
-                    out.push((i, at, at + eff.width(), "effort"));
-                }
-                break;
-            }
+            out.push((i, p[..b].width(), p.width()));
         }
     }
     out
@@ -331,21 +317,10 @@ pub fn hot_spots(lines: &[SLine], model: &str, accts: &[String]) -> Vec<(usize, 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn hot_spots_split_model_and_effort() {
+    fn hot_spots_find_account() {
         let l = |s: &str| vec![(s.to_owned(), None)];
-        let lines = vec![l("buttons"), l("Opus 5.5 high · siyuan.l x"), l("✦ Opus5.5"), l(&format!("{} high", super::icon("effort"))), l("Opus 5.5 · siyuan.l")];
-        let got = super::hot_spots(&lines, "Opus 5.5/high", &["siyuan.l".into()]);
-        assert_eq!(
-            got,
-            vec![
-                (1, 16, 26, "acct"),
-                (1, 0, 8, "model"),
-                (1, 9, 13, "effort"),
-                (2, 2, 9, "model"),
-                (3, 2, 6, "effort"),
-                (4, 11, 19, "acct"),
-                (4, 0, 8, "model"),
-            ]
-        );
+        let lines = vec![l("buttons"), l("Opus 5.5 high · siyuan.l x"), l("✦ Opus5.5"), l("@ siyuan.l2 ⇄")];
+        let got = super::hot_spots(&lines, &["siyuan.l2".into(), "l2".into()]);
+        assert_eq!(got, vec![(3, 2, 13)]);
     }
 }
