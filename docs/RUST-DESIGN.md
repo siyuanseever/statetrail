@@ -103,6 +103,8 @@ herdr plugin install siyuanseever/statetrail/herdr
   manifest 里的 `menu` 窗格、`statetrail menu` 子命令、`plugrun` 回传都删了。只列有 `pane` 上下文动作的插件（和以前一样）。
 - 窄版的 ▲（上面还有几轮）单独占表头最后一行，不再和 7d 额度挤一行（用户 2026-10-26 要的）。一屏放得下时没有这一行。
 - 窄版表头 effort 单独一行（用户原话「effort 单独一行」）：以前是「Opus5.5 hi」挤一行、effort 只留两个字；现在模型名一行、下一行是 effort 全名，和模型名对齐，两段都还能点开下拉菜单。
+- 窄版 effort 那一行自带图标（仪表盘，nf-fa-tachometer；unicode 档「◔」），不再用空格对齐模型名（用户原话「model 和 effort 能不能分别给一个 icon 呀，现在 effort 前面是空的，感觉不协调」）。
+- 窄版账号写完整用户名（siyuan.l / siyuan.l2），不再只留和别的账号不一样的那截（用户原话「账号不应该显示用户名吗？l 是简称吧」）；放不下 15 列才退回那截。
 
 来自迁移会话留下的交接（`docs/HANDOFF-2026-10-26-herdr.md`，已并进这里、删掉）。本机现在装的就是这个目录：
 `herdr plugin link ~/projects/statetrail/herdr-rs`。link 的目录 `herdr plugin update` 管不到，有新提交要本地

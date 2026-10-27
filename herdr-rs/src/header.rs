@@ -14,12 +14,13 @@ pub const SLOT: usize = 3; // 图标按钮占 3 格（空格 + 图标 + 空格�
 pub const GAP: usize = 1;
 
 /// 图标三档：(nerd, unicode, text)。文字档的字跟着界面语言。
-const ICONS: [(&str, &str, &str, &str); 15] = [
+const ICONS: [(&str, &str, &str, &str); 16] = [
     ("narrow", "\u{f101}", "»", ">>"),
     ("wide", "\u{f100}", "«", "<<"),
     ("bottom", "\u{f103}", "⇊", "End"),
     ("usage", "\u{f021}", "⟳", "Ref"),
     ("model", "\u{f0e7}", "✦", ""),
+    ("effort", "\u{f0e4}", "◔", ""), // 仪表盘（nf-fa-tachometer）：窄版 effort 单独一行时打头
     ("account", "\u{f007}", "@", ""),
     ("ctx", "\u{f2db}", "◧", "ctx"),
     ("5h", "\u{f017}", "◷", "5h"),
@@ -235,19 +236,22 @@ pub fn narrow(width: usize, i: &Info) -> Vec<SLine> {
     };
     let mut fields: Vec<(u8, SLine)> = Vec::new();
     if !i.model.is_empty() {
-        // `Opus 5.5/high` → 一行 `Opus5.5`、下一行 `high`（和模型名对齐）：两段各是一个按钮，effort 单独一行（用户定的）
+        // `Opus 5.5/high` → 一行 `Opus5.5`、下一行 `high`：两段各是一个按钮，effort 单独一行、自带图标（用户定的）
         let (name, effort) = i.model.split_once('/').unwrap_or((i.model, ""));
-        let model = tagged("model", &name.replace(' ', ""));
-        let indent = width_of(&model) - name.replace(' ', "").width();
-        fields.push((2, model));
+        fields.push((2, tagged("model", &name.replace(' ', ""))));
         if !effort.is_empty() {
-            fields.push((2, vec![(format!("{}{effort}", " ".repeat(indent)), Some(c.grey))]));
+            fields.push((2, tagged("effort", effort)));
         }
     }
-    let acct = claude::short_account(i.cfg_dir);
-    if !acct.is_empty() {
-        let mut field = tagged("account", &acct);
+    // 账号写完整用户名（用户定的），放不下才退成和别的账号不一样的那截
+    let acct_field = |acct: &str| {
+        let mut field = tagged("account", acct);
         field.push((format!(" {}", icon("switch")), Some(c.accent)));
+        field
+    };
+    let full = acct_field(&claude::current_account(i.cfg_dir));
+    let field = if width_of(&full) <= room { full } else { acct_field(&claude::short_account(i.cfg_dir)) };
+    if !claude::current_account(i.cfg_dir).is_empty() {
         fields.push((1, field));
     }
     let lab_w = ["ctx", "5h", "7d"].iter().map(|x| icon(x).width()).max().unwrap_or(0);
@@ -289,7 +293,7 @@ pub fn plain_lines(lines: &[SLine]) -> String {
 
 /// 表头里能点开下拉菜单的几段字：(第几行，从 0 数, 列起, 列止, 哪种)。列按显示宽度、从表头文字的第一列算起。
 /// 模型名 → "model"，后面隔一格的「high」→ "effort"，账号名到行尾（连 ⇄）→ "acct"。宽版、窄版都按字找
-/// （窄版的模型名去了空格，effort 单独一行：整行去掉空白正好是 effort 就算）。
+/// （窄版的模型名去了空格，effort 单独一行：整行去掉空白是「effort 图标 + effort」就算）。
 pub fn hot_spots(lines: &[SLine], model: &str, accts: &[String]) -> Vec<(usize, usize, usize, &'static str)> {
     let (name, effort) = model.split_once('/').unwrap_or((model, ""));
     let mut out = Vec::new();
@@ -301,8 +305,8 @@ pub fn hot_spots(lines: &[SLine], model: &str, accts: &[String]) -> Vec<(usize, 
         if name.is_empty() {
             continue;
         }
-        if !effort.is_empty() && p.trim() == effort {
-            let at = p.width() - p.trim_start().width();
+        if !effort.is_empty() && p.trim_end().ends_with(effort) && p.trim().strip_suffix(effort).is_some_and(|ic| ic.trim() == icon("effort")) {
+            let at = p.trim_end().width() - effort.width();
             out.push((i, at, at + effort.width(), "effort"));
             continue;
         }
@@ -329,7 +333,7 @@ mod tests {
     #[test]
     fn hot_spots_split_model_and_effort() {
         let l = |s: &str| vec![(s.to_owned(), None)];
-        let lines = vec![l("buttons"), l("Opus 5.5 high · siyuan.l x"), l("✦ Opus5.5"), l("  high"), l("Opus 5.5 · siyuan.l")];
+        let lines = vec![l("buttons"), l("Opus 5.5 high · siyuan.l x"), l("✦ Opus5.5"), l(&format!("{} high", super::icon("effort"))), l("Opus 5.5 · siyuan.l")];
         let got = super::hot_spots(&lines, "Opus 5.5/high", &["siyuan.l".into()]);
         assert_eq!(
             got,
