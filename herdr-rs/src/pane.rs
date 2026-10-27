@@ -41,6 +41,7 @@ enum Msg {
     Wake,                              // 后台查完额度了：重画
     PluginTab(String, String, String), // (插件, 动作, 它开出来的标签页)
     ModelNow(String),                  // 刚从表头换了模型 / effort：「Opus 5.5/high」
+    Ultracode(bool),                   // 刚从表头开 / 关了 ultracode
 }
 
 fn sock_of(pane: &str) -> PathBuf {
@@ -111,6 +112,7 @@ struct Trail {
     mc: (Option<u64>, (String, String)), // (对话记录大小, (模型, 上下文))：没变就不重读尾巴
     // 刚换了模型 / effort：(换之前对话记录里的模型, 换成的)。对话记录要等下一条回复才写新模型，在那之前表头先显示换成的
     model_now: Option<(String, String)>,
+    ultracode: bool, // 轨迹上次把 ultracode 设成了什么。Claude Code 不把它写进任何文件，只能自己记；Claude 重起就回到关
     last_kick: Option<Instant>,
     view: (usize, usize, usize),     // (列表上面还有几轮, 下面还有几轮, 露出来几项)
     up_at: Option<(usize, usize)>,   // 表头里的 ▲：(第几行, 占到第几列)
@@ -181,6 +183,7 @@ impl Trail {
                 // Claude 退出又起来了（比如换账号 --resume 同一个会话）：会话 id 可能没变，配置目录要重认
                 self.cfg_dir = claude::config_dir_of_pid(herdr::claude_pid(&self.target));
                 self.model_now = None;
+                self.ultracode = false;
             }
         } else if self.no_claude_since.is_none() {
             self.no_claude_since = Some(Instant::now());
@@ -732,7 +735,7 @@ impl Trail {
 
     /// ⋯：用 herdr 的 popup 列出所有插件的所有 action（statetrail menu），选中的那一条经 socket 送回来再调。
     /// popup 开着时整个会话只认它，所以不在 popup 里直接调：等它关了，这边再调。
-    /// 点了表头的模型名 / effort / 账号：在那段字正下方（x, y）画一个下拉菜单。effort 那一份最后带 ultracode 开关；
+    /// 点了表头的模型名 / effort / 账号：在那段字正下方（x, y）画一个下拉菜单。effort 那一份最后带一行 ultracode 开关；
     /// 表头上没显示 effort 时（对话记录里还没有），模型那一份把 effort 也带上。
     fn open_menu(&mut self, kind: &str, x: u16, y: u16) {
         let (model, _) = self.model_ctx();
@@ -744,8 +747,12 @@ impl Trail {
                 .map(|e| item("effort", e, (*e).to_owned(), effort == *e))
                 .collect();
             v.push((String::new(), String::new(), false));
-            v.push(item("ultracode", "on", t("ultracode 开"), false));
-            v.push(item("ultracode", "off", t("ultracode 关"), false));
+            // 只放一行：点了会切到的那一头（用户 2026-10-27：「只显示要切换的 action 对应的就可以了」）
+            v.push(if self.ultracode {
+                item("ultracode", "off", t("ultracode → 关"), false)
+            } else {
+                item("ultracode", "on", t("ultracode → 开"), false)
+            });
             v
         };
         let items = match kind {
@@ -807,6 +814,9 @@ impl Trail {
                 "ultracode" => t("ultracode 已关"),
                 _ => String::new(),
             };
+            if kind == "ultracode" && r.is_ok() {
+                let _ = tx.send(Msg::Ultracode(value == "on"));
+            }
             if matches!(kind.as_str(), "model" | "effort")
                 && let Ok(m) = &r
                 && let Some(now) = model_from_reply(m, if kind == "effort" { &value } else { &cur_effort })
@@ -1072,6 +1082,7 @@ pub fn run(cfg: Config) {
         hover: None,
         mc: (None, (String::new(), String::new())),
         model_now: None,
+        ultracode: false,
         last_kick: None,
         view: (0, 0, 0),
         up_at: None,
@@ -1427,12 +1438,14 @@ fn run_loop(
                     ["rescan"] => {
                         s.cfg_dir = claude::config_dir_of_pid(herdr::claude_pid(&s.target));
                         s.model_now = None; // 重起的 Claude 按原来的启动参数起，只改这个会话的模型 / effort 没了
+                        s.ultracode = false;
                     }
                     _ => {}
                 }
             }
             Ok(Msg::Flash(m, d)) => s.say(m, d),
             Ok(Msg::Wake) => {}
+            Ok(Msg::Ultracode(on)) => s.ultracode = on,
             Ok(Msg::ModelNow(m)) => {
                 let was = s.mc.1.0.clone();
                 s.model_now = Some((was, m));

@@ -96,8 +96,8 @@ Claude 正在工作或等你确认，等它停下再换	Claude is busy or waitin
 没看到 Claude 的回应，请看一眼	no reply from Claude; take a look
 模型换成 {v}，只改这个会话	model now {v}, this session only
 effort 换成 {v}，只改这个会话	effort now {v}, this session only
-ultracode 开	ultracode on
-ultracode 关	ultracode off
+ultracode → 开	ultracode → on
+ultracode → 关	ultracode → off
 ultracode 已开	ultracode on
 ultracode 已关	ultracode off
 下一条会重读整段对话	next reply re-reads the whole conversation
