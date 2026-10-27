@@ -280,10 +280,12 @@ pub fn narrow(width: usize, i: &Info) -> Vec<SLine> {
     if let Some(u) = i.usage {
         for (label, w, prio) in [("5h", &u.five_hour, 9u8), ("7d", &u.seven_day, 3)] {
             if let Some((p, colour)) = render::quota_pct(w, label) {
-                fields.push((
-                    prio,
-                    vec![(pad(label), Some(c.grey)), (" ".into(), None), (format!("{p:3.0}%"), Some(colour))],
-                ));
+                let mut line = vec![(pad(label), Some(c.grey)), (" ".into(), None), (format!("{p:3.0}%"), Some(colour))];
+                // 后面跟着还有多久重置（用户 2026-10-27：「额度还剩多久更新」）
+                if let Some(left) = claude::secs_left(w) {
+                    line.push((format!(" {:>6}", render::left_str(left)), Some(c.grey)));
+                }
+                fields.push((prio, line));
             }
         }
     }

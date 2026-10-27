@@ -58,7 +58,7 @@ pub fn lead(line: SLine, tag: &str, slot: usize) -> SLine {
 }
 
 /// 还有多久重置，窄到塞得进一行：1d14h / 2h01m / 37m（固定 6 格）。
-fn left_str(secs: f64) -> String {
+pub fn left_str(secs: f64) -> String {
     if secs <= 0.0 {
         let s = t("已过");
         return format!("{}{s}", " ".repeat(6usize.saturating_sub(s.width())));

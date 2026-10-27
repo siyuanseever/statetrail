@@ -108,6 +108,7 @@ herdr plugin install siyuanseever/statetrail/herdr
 - ~~effort 菜单里 ultracode 只放一行~~（`c027c8f`），当天就随下一条一起撤了。
 - **2026-10-27 起模型、effort、ultracode 只显示，不能点**，表头里能点的只剩账号（连 ⇄）。用户原话「我切换模型咋没反应呢」「有反应之后他一直在滚动 conversation 历史」「如果我们做的体验不好就不要做可交互了」。原因：只改这个会话的模型，只有 Claude 的 /model 选择框能做到（带参数的 `/model sonnet` 会存成新会话默认，两个账号共用），轨迹只能替用户打 /model、按 ↑↓←→、按 s，屏幕跟着动；Claude 在跑时还按不了，窄版当时只画一个「!」，看着像没反应。`statetrail set` 命令行还留着（`switch::set_model` / `set_ultracode`），轨迹不再调。
 - 窄版的提示（换账号的进展、失败原因）按宽度折到按钮下面、最多三行，不再只画一个「!」。
+- 窄版 5h / 7d 百分比后面跟着还有多久重置（「 9%  2h41m」「36%  2d12h」，格式和宽版一样，用户原话「额度还剩多久更新」）；读不到重置时间就不写。
 
 来自迁移会话留下的交接（`docs/HANDOFF-2026-10-26-herdr.md`，已并进这里、删掉）。本机现在装的就是这个目录：
 `herdr plugin link ~/projects/statetrail/herdr-rs`。link 的目录 `herdr plugin update` 管不到，有新提交要本地
