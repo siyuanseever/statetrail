@@ -10,6 +10,12 @@ min_herdr_version = "0.9.5"
 description = "Claude Code session trail docked to the right of the Claude pane (Rust rewrite, in development)."
 platforms = ["macos", "linux"]
 
+# herdr plugin install 时跑：按 version 从 GitHub Release 下这个平台编好的 bin/statetrail，下不到就用 cargo 就地编。
+# herdr plugin link（本地开发）不跑它。发版流程见仓库根目录 .github/workflows/release-rs.yml。
+[[build]]
+platforms = ["macos", "linux"]
+command = ["bash", "install.sh"]
+
 [[actions]]
 id = "toggle"
 title = "Toggle statetrail"
