@@ -94,6 +94,13 @@ herdr plugin install siyuanseever/statetrail/herdr
 
 每一步都在单独的 worktree 里做，做完先 link 到你本机试，资源检查达标才算这一步完成。第 6 步之前，不动大家正在装的 Python 版。
 
+**第 6 步进展（2026-10-27，用户「要不我们尝试着发一下？」）**
+
+- 市场规则（herdr v0.9.5 文档 `marketplace.mdx`）：只收**默认分支（main）**上能解析的 `herdr-plugin.toml`，仓库要带 `herdr-plugin` 标签（已带），每 30 分钟刷新。所以 Rust 版上市场 = 合进 main；之前都可以在 `rust` 分支上做。`herdr plugin install` 支持 `--ref`，预发布可以 `herdr plugin install siyuanseever/statetrail/herdr-rs --ref v0.2.0-rc.1` 装。
+- 已做（`835ec3a`，本地已提交）：`herdr-rs/install.sh`（清单 `[[build]]` 调它，按 version 从 Release 下包、校验 sha256，下不到就用 cargo 现编）；`.github/workflows/release-rs.yml`（mac arm64 / x86_64、linux musl x86_64 / arm64；推 `v0.2*` 起的标签发 Release，带「-」的是预发布；推 rust 分支只编不发）。现编那条路实测过，下载那条路要等第一个预发布。
+- 接下来：推 rust 看 4 个平台编得过 → 清单 version 改 `0.2.0-rc.1`、打同名标签（发布动作，等用户点头）→ 本机 unlink 本地版、从 GitHub 装一遍试 → 合 main（等用户点头）。
+- 合 main 时要定：main 上 `herdr/`（Python 版，同一个 id）和 `herdr-rs/` 两份清单市场会各列一行，都叫 statetrail。
+
 ## 本机从 tmux 迁到 herdr 之后补的（2026-10-26）
 
 - 默认打开窄版（细条，19 列）：用户原话「我们用细条版本作为默认版本吧」。配置 `default_mode = "wide"` 才开宽版；Python 版不动，仍默认宽版。
