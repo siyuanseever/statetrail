@@ -5,7 +5,7 @@
 # 开着的轨迹试跑新程序失败，就不会原地换上它
 id = "statetrail"
 name = "statetrail"
-version = "0.2.0-rc.1"
+version = "0.2.0"
 min_herdr_version = "0.9.5"
 description = "Every turn of your Claude Code session, docked next to the running Claude: click one and Claude scrolls to it."
 platforms = ["macos", "linux"]
