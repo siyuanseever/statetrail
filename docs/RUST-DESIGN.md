@@ -105,7 +105,11 @@ herdr plugin install siyuanseever/statetrail/herdr
 - 市场规则（herdr v0.9.5 文档 `marketplace.mdx`）：只收**默认分支（main）**上能解析的 `herdr-plugin.toml`，仓库要带 `herdr-plugin` 标签（已带），每 30 分钟刷新。所以 Rust 版上市场 = 合进 main；之前都可以在 `rust` 分支上做。`herdr plugin install` 支持 `--ref`，预发布可以 `herdr plugin install siyuanseever/statetrail/herdr-rs --ref v0.2.0-rc.1` 装。
 - 已做（`835ec3a`，本地已提交）：`herdr-rs/install.sh`（清单 `[[build]]` 调它，按 version 从 Release 下包、校验 sha256，下不到就用 cargo 现编）；`.github/workflows/release-rs.yml`（mac arm64 / x86_64、linux musl x86_64 / arm64；推 `v0.2*` 起的标签发 Release，带「-」的是预发布；推 rust 分支只编不发）。现编那条路实测过，下载那条路要等第一个预发布。
 - 接下来：推 rust 看 4 个平台编得过 → 清单 version 改 `0.2.0-rc.1`、打同名标签（发布动作，等用户点头）→ 本机 unlink 本地版、从 GitHub 装一遍试 → 合 main（等用户点头）。
-- 合 main 时要定：main 上 `herdr/`（Python 版，同一个 id）和 `herdr-rs/` 两份清单市场会各列一行，都叫 statetrail。
+- 合 main 时要定：main 上 `herdr/`（Python 版，同一个 id）和 `herdr-rs/` 两份清单市场会各列一行，都叫 statetrail。（已定：Rust 版替换 `herdr/`，`508acc7`）
+- **v0.2.0-rc.1 已发（2026-10-28 11:44，用户「发」）**：标签指向 `aa6fbbc`，CI run 40628400331 编 4 个平台、建了预发布 Release（8 个文件：4 个 tar.gz + 4 个 sha256）。
+  本机试装：unlink 本地版 → `herdr plugin install siyuanseever/statetrail/herdr --ref v0.2.0-rc.1 --yes` → 装上的 `bin/statetrail` 的 sha256
+  （`c3babc4d…`）和 Release 里 aarch64-apple-darwin 包解出来的一样，插件目录里没有 `target/`（是下载的、不是现编的）；26 个轨迹都换成从
+  安装目录起，表头正常。试完 `herdr plugin link` 回本地 `herdr/`。main 可以从 rust 快进（main 上没有 rust 没有的提交）。
 
 ## 本机从 tmux 迁到 herdr 之后补的（2026-10-26）
 
