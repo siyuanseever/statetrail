@@ -1,41 +1,44 @@
-# statetrail（herdr 版）：Claude Code 会话轨迹，停在 Claude 窗格右边。
-# 每轮一项，点一项 Claude 就滚到那一轮的最终回复；表头带模型、账号和 ctx / 5h / 7d 额度柱子。
-# 安装：herdr plugin install siyuanseever/statetrail/herdr
+# statetrail（herdr 版）：Claude Code 会话轨迹，停在 Claude 窗格右边。0.2 起是 Rust 写的；
+# Python 版（0.1.x）在 v0.1.4 标签里，herdr plugin install siyuanseever/statetrail/herdr --ref v0.1.4。
+# 开发：cargo build --release && mkdir -p bin && cp target/release/statetrail bin/.new && mv bin/.new bin/statetrail，
+# 再 herdr plugin link 这个目录。别直接 cp 盖掉 bin/statetrail：macOS 上原地改写的程序一跑就被系统杀掉（退出码 137），
+# 开着的轨迹试跑新程序失败，就不会原地换上它
 id = "statetrail"
 name = "statetrail"
-version = "0.1.4"
+version = "0.2.0-dev"
 min_herdr_version = "0.9.5"
-description = "Claude Code session trail docked to the right of the Claude pane: one row per turn, click a turn and Claude scrolls to its final reply. Context and quota bars on top."
+description = "Claude Code session trail docked to the right of the Claude pane (Rust rewrite, in development)."
 platforms = ["macos", "linux"]
+
+# herdr plugin install 时跑：按 version 从 GitHub Release 下这个平台编好的 bin/statetrail，下不到就用 cargo 就地编。
+# herdr plugin link（本地开发）不跑它。发版流程见仓库根目录 .github/workflows/release-rs.yml。
+[[build]]
+platforms = ["macos", "linux"]
+command = ["bash", "install.sh"]
 
 [[actions]]
 id = "toggle"
 title = "Toggle statetrail"
 description = "Open the trail beside the focused Claude Code pane, or switch it between the wide and the narrow layout."
 contexts = ["pane"]
-command = ["python3", "trail.py", "toggle"]
-
-# 默认打开：tab 里正好有一个 Claude 时在它右边开（左边留给 herdr-sidebar 之类）。
-# 轨迹没有「关闭」：宽版 / 窄版两种都能长期用，左上角 » / « 切换；Claude 没了才真正关掉。
-# 不挂 pane.focused：切 tab 时它和 tab.focused 成对来，钩子白跑一遍（每次约 0.04 秒 CPU）；
-# 切 tab / 工作区都有 tab.focused，tab 里新起 Claude 有 pane.agent_detected，够用了。
-[[events]]
-on = "tab.focused"
-command = ["python3", "trail.py", "auto"]
+command = ["bin/statetrail", "toggle"]
 
 [[events]]
 on = "pane.agent_detected"
-command = ["python3", "trail.py", "auto"]
+command = ["bin/statetrail", "auto"]
+
+[[events]]
+on = "tab.focused"
+command = ["bin/statetrail", "auto"]
 
 [[panes]]
 id = "trail"
 title = "statetrail"
 placement = "split"
-command = ["python3", "trail.py", "pane"]
+command = ["bin/statetrail", "pane"]
 
-
-# 底部的自定义按钮（配置里的 [[buttons]]，默认 Git = lazygit、文件 = yazi、命令行）：trail.py 把它从 Claude 下面切出来
-# （占 Claude 那一格高度的 tool_height），Git、文件点外面就关。命令由 trail.py 经 STATETRAIL_CMD 传进来。
+# 底部的自定义按钮（配置里的 [[buttons]]，默认 Git = lazygit、文件 = yazi、命令行）：轨迹把它从 Claude
+# 下面切出来（占 Claude 那一格高度的 height / tool_height），除了命令行都是点外面就关。命令经 STATETRAIL_CMD 传进来。
 [[panes]]
 id = "tool"
 title = "Tool"
@@ -43,9 +46,3 @@ placement = "split"
 # 目录进不去（被删了）就在家目录里开，别让窗格一闪就没了
 command = ["sh", "-c", "cd \"${STATETRAIL_CWD:-$PWD}\" 2>/dev/null || cd \"$HOME\"; exec sh -c \"$STATETRAIL_CMD\""]
 
-# 底部 ⋯：列出其他 herdr 插件的所有 action，点一下就运行（trail.py menu，选中的那一条交回轨迹去调）
-[[panes]]
-id = "menu"
-title = "plugins"
-placement = "popup"
-command = ["python3", "trail.py", "menu"]

@@ -1,5 +1,5 @@
-# Rust 版 statetrail（herdr-rs/）：推 v0.2 起的标签就编 4 个平台、发到 GitHub Release，
-# herdr 装插件时 herdr-rs/install.sh 按清单里的 version 下对应的包。推 rust 分支（改到 herdr-rs/ 时）只编不发。
+# Rust 版 statetrail（herdr/）：推 v0.2 起的标签就编 4 个平台、发到 GitHub Release，
+# herdr 装插件时 herdr/install.sh 按清单里的 version 下对应的包。推 rust 分支（改到 herdr/ 时）只编不发。
 name: release-rs
 
 on:
@@ -7,7 +7,7 @@ on:
     tags: ["v0.2*", "v0.3*", "v0.4*", "v0.5*", "v0.6*", "v0.7*", "v0.8*", "v0.9*", "v1*"]
     # 推标签时不看 paths
     branches: [rust]
-    paths: ["herdr-rs/**", ".github/workflows/release-rs.yml"]
+    paths: ["herdr/**", ".github/workflows/release-rs.yml"]
   workflow_dispatch:
 
 permissions:
@@ -26,7 +26,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     defaults:
       run:
-        working-directory: herdr-rs
+        working-directory: herdr
     steps:
       - uses: actions/checkout@v4
       - name: Check manifest version matches the tag
@@ -51,7 +51,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: statetrail-${{ matrix.target }}
-          path: herdr-rs/statetrail-${{ matrix.target }}.tar.gz*
+          path: herdr/statetrail-${{ matrix.target }}.tar.gz*
 
   release:
     needs: build
@@ -69,4 +69,4 @@ jobs:
           pre=""
           case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" $pre \
-            --title "statetrail $GITHUB_REF_NAME (Rust)" --notes "Rust rewrite of statetrail for herdr. Install: herdr plugin install siyuanseever/statetrail/herdr-rs --ref $GITHUB_REF_NAME"
+            --title "statetrail $GITHUB_REF_NAME (Rust)" --notes "Rust rewrite of statetrail for herdr. Install: herdr plugin install siyuanseever/statetrail/herdr --ref $GITHUB_REF_NAME"

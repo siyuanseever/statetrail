@@ -14,11 +14,17 @@
 
 ```
 statetrail/
-  herdr/        Python 版（冻结）。替换那一步之前，安装命令一直指向这里
-  herdr-rs/     Rust 版的插件目录：herdr-plugin.toml、install.sh（构建步骤）、Cargo 工程
-    src/
+  herdr/        插件目录（2026-10-28 起是 Rust 版）：herdr-plugin.toml、install.sh（构建步骤）、Cargo 工程、
+    src/        可选的 statusline.py 桥接
   docs/
+  .github/workflows/release-rs.yml
 ```
+
+**2026-10-28 已替换**（用户「我倾向于用 Rust 版直接替换 herdr/：可以」）：Python 版直接删掉，没有挪进 `legacy/herdr-py/`——
+main 上多一份 `herdr-plugin.toml` 市场就会多列一个同名插件。Python 版要用就 `--ref v0.1.4`。`statusline.py` 留在 `herdr/`
+（Rust 版照样读它写的额度）；`demo/stage.py` 借用 Python 版的 `demo/gif.py`，一起删了。下面「替换前」的文字保留作记录。
+
+替换前：
 
 开发期间你可以 `herdr plugin link ~/projects/statetrail/herdr-rs` 来试，想退回就再 link 回 `herdr/`。
 功能对齐、资源达标以后：Python 版挪到 `legacy/herdr-py/`（v0.1.4 标签里也留着），`herdr-rs/` 改名成 `herdr/`。这样大家的安装命令
@@ -118,7 +124,7 @@ herdr plugin install siyuanseever/statetrail/herdr
 - 窄版 5h / 7d 百分比后面跟着还有多久重置（「 9%  2h41m」「36%  2d12h」，格式和宽版一样，用户原话「额度还剩多久更新」）；读不到重置时间就不写。
 
 来自迁移会话留下的交接（`docs/HANDOFF-2026-10-26-herdr.md`，已并进这里、删掉）。本机现在装的就是这个目录：
-`herdr plugin link ~/projects/statetrail/herdr-rs`。link 的目录 `herdr plugin update` 管不到，有新提交要本地
+`herdr plugin link ~/projects/statetrail/herdr`（10-28 之前是 `herdr-rs`）。link 的目录 `herdr plugin update` 管不到，有新提交要本地
 `cargo build --release`，再按 manifest 注释用 `bin/.new` + `mv` 换掉程序；开着的轨迹会自己原地重启。
 
 | 问题 | 怎么处理的 | 提交 |

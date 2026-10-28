@@ -16,11 +16,15 @@ statetrail 管的是你正在用的这个会话：贴在运行中的 Claude 旁�
 
 - **轨迹。** 每轮一行，点一行 Claude 就跳过去，通常不到一秒。`/compact` 之前的轮次收成一行。
   Claude 一开始干活、一停下，列表就刷新。Claude 退出后轨迹几秒内就关掉（Claude 的窗格整个关掉时立刻关），再启动 Claude 又会自动打开。列表比窗格长时，列表上面那一行的最前面写「▲ 12」、
-  下面那一行的最前面写「▼ 5」，是上下还有几轮没露出来（窄版是「▲12」「▼5」，▼ 放在底部第二行），点一下翻一屏。
+  下面那一行的最前面写「▼ 5」，是上下还有几轮没露出来（窄版的「▲12」单独占表头最后一行，「▼5」在底部），点一下翻一屏。
   它们靠左，和柱子对齐；翻到头时那段位置空着不收，翻页时旁边的字和按钮不挪。
 - **模型、账号、额度。** `ctx`、`5h`、`7d` 三条柱子，平时灰色，快出问题了才上色：额度柱子按「用得比时间走得快多少」变橙、变红，
-  不是单看用了多少。两个 Claude 账号同时在线（各用一个 `CLAUDE_CONFIG_DIR`）也没问题，每个窗格显示自己那个账号的。
-- **宽版和窄版。** 拖分隔线就能改宽度：30 列以上是完整的宽版，不到 30 列是窄版（模型和账号的缩写、百分比、每轮一短行）。
+  不是单看用了多少。每个额度后面写着还有多久重置（`2h41m`、`2d12h`）。两个 Claude 账号同时在线（各用一个 `CLAUDE_CONFIG_DIR`）
+  也没问题，每个窗格显示自己那个账号的。模型和 effort 只显示、不能点：要换就在 Claude 里照常敲 `/model`。
+- **就地换账号**（可选）。在 `~/.config/claude-tmux/accounts.json` 里列出你的账号
+  （`{"accounts": {"work": {"config_dir": "~/.claude-work"}, ...}}`）后，点账号名（`⇄`）选另一个：那个 Claude 空闲时，
+  statetrail 让它退出，再在原窗格里用另一个账号 `--resume` 同一个会话。Claude 在干活、在等你确认、输入框里有没发出去的字时不动。
+- **窄版和宽版。** 默认打开窄版（17 列）：模型、effort、账号、带重置时间的百分比、每轮一短行。拖分隔线到 30 列以上就是带柱子的完整宽版。
   左上角的 `»` / `«` 一键在两种宽度之间切换。没有关闭按钮，窄版就是把它收起来的方式。
 - **跟着 herdr，只补它没有的。** 颜色取自你的 herdr 主题；没起过名的 tab 会用 Claude 的会话名命名。
   Claude 在不在干活这类状态不重复显示，herdr 左侧的 Agents 栏已经有了。
@@ -39,20 +43,23 @@ statetrail 管的是你正在用的这个会话：贴在运行中的 Claude 旁�
   第一个 action，顺序按它自己的 manifest（herdr-sidebar 是 `open-sidebar`）。例外是 zoetrope：它的第一个 action 开的是 overlay，
   而 herdr 的 overlay 会盖满整个标签页、连轨迹一起盖住，所以它的按钮改跑 `open-tab`（`open-split` 会把 Claude 从 83 列挤到 42 列；
   新开一个标签页，这一页一点不动）。开新标签页的插件：点按钮会切到它开的那一页，并为这个 Claude 记下来，再点就直接切回那一页，
-  不会再开第二个（那一页被你关了才重新开）。放不下的收进 `⋯`，点了弹出所有插件的所有 action（带名字），点哪个就运行哪个，`Esc` 不选。
+  不会再开第二个（那一页被你关了才重新开）。放不下的收进 `⋯`，点了在它正上方弹一个小菜单，一个插件一行、只写名字，点哪个就运行哪个，点轨迹里别处收起。
   插件列表在打开轨迹时、点 `⟳` 时、herdr 的 `plugins.json` 改了时（装、卸插件）读：卸掉的插件几秒内自己从底部消失。
 - **自己跟着更新。** `herdr plugin update` 之后，开着的轨迹十秒左右就会发现，在原来那一格里换成新代码重启，位置和宽度都不变，
   不用关了再开。
 
 ## 安装
 
-需要：herdr 0.9.5+、Python 3.11+、fzf 0.71+（实测 0.74）。可选：lazygit、yazi（默认的两个按钮用）。
-macOS 自带的 Python 是 3.9，要先装一个新的：
+需要：macOS 或 Linux 上的 herdr 0.9.5+，别的都不用装：安装时会从本仓库的 GitHub Release 下载你这个平台编好的程序
+（Apple 芯片 / Intel 的 Mac，x86_64 / arm64 的 Linux），并校验 SHA-256。别的平台或者断网时，本机有 `cargo` 就现编一个。
+可选：lazygit、yazi（默认的两个按钮用）。
 
 ```bash
-brew install python fzf          # 要默认按钮的话再加 lazygit yazi
 herdr plugin install siyuanseever/statetrail/herdr
+brew install lazygit yazi        # 要默认按钮的话
 ```
+
+Python 版（0.1.x）还在：`herdr plugin install siyuanseever/statetrail/herdr --ref v0.1.4`。
 
 缺了什么，statetrail 会说出来（herdr 通知，或者在它的窗格里写出来），不会静默失败。
 
@@ -75,7 +82,7 @@ Claude Code 要用全屏界面（`/tui fullscreen`），跳转滚的就是它。
 
 ```toml
 auto_open = true          # tab 里正好有一个 Claude 时自己打开
-default_mode = "wide"     # 打开时多宽："wide" 或 "narrow"
+default_mode = "narrow"   # 打开时多宽："narrow" 或 "wide"
 width = 0.25              # 宽版占 Claude 那一格的比例（总会给 Claude 留 110 列）
 icons = "auto"            # "auto"：装了 Nerd Font 就用它的图标，没装用普通符号；也可以写 "nerd" / "unicode" / "text"
                           # 装了不代表终端在用它：显示成方块就手动设 "unicode"
@@ -133,8 +140,9 @@ plugin_buttons = true
      （比如你跑 `/usage`）才更新，可能是好几天前的。
 
   表头会写出数字有多旧；重置时间已经过了的窗口显示「?」，不显示旧数字。
-- **发键** 给 Claude 窗格只为滚屏（PageUp / PageDown / Ctrl+Home / Ctrl+End / 滚轮），从不往输入框里打字。
-- **查有没有更新** 每 5 秒一次：读 herdr 自己的 `plugins.json` 和本插件代码文件的修改时间，不联网。
+- **发键** 给 Claude 窗格是为了滚屏（PageUp / PageDown / Ctrl+Home / Ctrl+End / 滚轮）。只有你在表头选了另一个账号时，
+  才往输入框里打字：`/exit`，然后是重启的命令。
+- **查有没有更新**：读 herdr 自己的 `plugins.json` 和本插件程序文件的修改时间，不联网。
 - 它自己的状态放在插件的状态目录（`~/.local/state/herdr/plugins/statetrail/`）。
 
 ## 不碰凭据也能拿到新数字：Status Line 桥接（可选）
@@ -160,7 +168,7 @@ Claude Code 每回复一条，都会把当前 5 小时、7 天的用量交给你
 - **一个 tab 一个 Claude。** 同一个 tab 里有 agent teams 的队友时不自动打开。
 - **Claude 屏幕上已经没有的轮次**（`/compact` 之后，或续接的会话里较早的部分）会标出来，点了直接告诉你，不会一直翻。
 - **整列高**指的是 Claude 那一格的整列高；你把 Claude 那一格上下切开的话，轨迹只有 Claude 那部分高。
-- 目前只支持 Claude Code。读对话记录是单独一层（`core/transcript.py`），以后可以接别的 agent。
+- 目前只支持 Claude Code。读对话记录是单独一层（`src/transcript.rs`），以后可以接别的 agent。
 
 ## Roadmap
 
@@ -171,10 +179,11 @@ Claude Code 每回复一条，都会把当前 5 小时、7 天的用量交给你
 
 ## 怎么做的
 
-每个轨迹是一个小 Python 进程加一个 fzf。它订阅 herdr 里自己那个 Claude 窗格的事件（状态变化、窗格关闭），
-没事件时就睡着，空闲时约占单核 0.1%。读 Claude 的屏幕、让它滚动都走 herdr 的 socket。
-`core/` 放和 herdr 无关的部分（对话记录、额度、画面、跳转算法），`trail.py` 是 herdr 这一侧。
+每个轨迹是一个小 Rust 程序（磁盘上约 1 MB，内存约 7 MB；实测开着 26 个、空闲时合计 CPU 0%）。它订阅 herdr 里自己那个
+Claude 窗格的事件（状态变化、窗格关闭），没事件时就睡着。读 Claude 的屏幕、让它滚动都走 herdr 的 socket。
+`src/` 里 `transcript.rs`、`claude.rs`、`render.rs`、`jump.rs` 和 herdr 无关（对话记录、额度、画面、跳转算法），
+`pane.rs`、`herdr.rs` 是 herdr 这一侧。0.1.x 是 Python + fzf 写的，0.2 是同一个插件用 Rust 重写。
 
 ## 许可证
 
-MIT。`themes.json` 里的主题配色提取自 herdr（Apache-2.0）。
+MIT。`src/themes.json` 里的主题配色提取自 herdr（Apache-2.0）。

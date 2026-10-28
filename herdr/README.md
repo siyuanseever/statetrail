@@ -19,14 +19,20 @@ statetrail is for the session you are in: it stays beside the live Claude and fo
   Turns before a `/compact` fold into one row. The list refreshes as soon as Claude starts or stops working.
   When Claude exits, the trail closes within a few seconds (with its pane, at once); start Claude again and it reopens.
   When the list is longer than the pane, `▲ 12` at the start of the line above it and `▼ 5` at the start of the
-  line below it say how many turns are out of view (`▲12` / `▼5` in the narrow view, where `▼` gets a second row);
-  click one to page by a screenful. They sit on the left, in line with the bars, in a slot that stays when a side
-  runs out, so nothing next to them moves while you page.
+  line below it say how many turns are out of view (in the narrow view `▲12` gets the last header row to itself and
+  `▼5` sits on the bottom row); click one to page by a screenful. They sit on the left, in line with the bars, in a
+  slot that stays when a side runs out, so nothing next to them moves while you page.
 - **Model, account, quota.** `ctx`, `5h` and `7d` bars, grey while things are fine and coloured only when they
   are not: a quota bar turns orange or red when you are using it faster than the window passes, not just when it is
-  high. Two Claude accounts at once (separate `CLAUDE_CONFIG_DIR`s) are fine; each pane shows its own.
-- **Wide and narrow.** Drag the divider: at 30 columns or more you get the full view, below that a narrow one
-  (short model and account names, percentages, one short row per turn). `»` / `«` in the top-left corner
+  high. Each quota also says how long until its window resets (`2h41m`, `2d12h`). Two Claude accounts at once
+  (separate `CLAUDE_CONFIG_DIR`s) are fine; each pane shows its own. Model and effort are shown, not switched:
+  change them with `/model` in Claude as usual.
+- **Switch account in place** (optional). If you list your accounts in `~/.config/claude-tmux/accounts.json`
+  (`{"accounts": {"work": {"config_dir": "~/.claude-work"}, ...}}`), click the account name (`⇄`) and pick another:
+  when that Claude is idle, statetrail exits it and starts it again in the same pane with `--resume`, same session,
+  other account. It refuses while Claude is working, waiting for you, or has unsent text in the prompt.
+- **Narrow and wide.** It opens narrow (17 columns): model, effort, account, percentages with reset times, one short
+  row per turn. Drag the divider to 30 columns or more for the full view with bars. `»` / `«` in the top-left corner
   jumps between the two widths. There is no close button: the narrow view is how you put it away.
 - **Follows herdr, adds only what herdr lacks.** Colours come from your herdr theme, and a tab you never named gets
   the Claude session's name. Claude's running / waiting state is not repeated: herdr's agent list already shows it.
@@ -52,7 +58,8 @@ statetrail is for the session you are in: it stays beside the live Claude and fo
   (`open-split` would squeeze Claude from 83 to 42 columns; a new tab leaves this one untouched). A plugin that opens
   a new tab: the button switches to it, remembers it for this Claude, and on the next click just switches back there
   instead of opening another one (a new one again only after you close it). What doesn't fit
-  goes into `⋯`, which pops up every action of every plugin, with names: click one to run it, `Esc` to cancel. The list is read
+  goes into `⋯`, a small drop-down right above it with one name per plugin: click one to run it, click anywhere else
+  in the trail to close it. The list is read
   when the trail opens, when you click `⟳`, and when herdr's `plugins.json` changes (install / uninstall), so an
   uninstalled plugin's button goes away by itself within a few seconds.
 - **Updates itself in place.** After `herdr plugin update`, each open trail notices within about ten seconds and
@@ -60,13 +67,17 @@ statetrail is for the session you are in: it stays beside the live Claude and fo
 
 ## Install
 
-Requirements: herdr 0.9.5+, Python 3.11+, fzf 0.71+ (tested with 0.74). Optional: lazygit and yazi for the
-default buttons. On macOS the system Python is 3.9, so install a newer one first:
+Requirements: herdr 0.9.5+ on macOS or Linux. Nothing else: installing downloads a prebuilt binary for your
+platform (Apple Silicon / Intel Mac, x86_64 / arm64 Linux) from this repository's GitHub release and checks its
+SHA-256. On any other platform, or offline, it builds from source if `cargo` is installed. Optional: lazygit and yazi
+for the default buttons.
 
 ```bash
-brew install python fzf          # lazygit yazi, if you want the default buttons
 herdr plugin install siyuanseever/statetrail/herdr
+brew install lazygit yazi        # if you want the default buttons
 ```
+
+The Python version (0.1.x) is still there: `herdr plugin install siyuanseever/statetrail/herdr --ref v0.1.4`.
 
 If something is missing, statetrail says so (a herdr notification, or a message in its pane) instead of failing silently.
 
@@ -90,7 +101,7 @@ broken file means defaults.
 
 ```toml
 auto_open = true          # open by itself in a tab that has exactly one Claude
-default_mode = "wide"     # width when it opens: "wide" or "narrow"
+default_mode = "narrow"   # width when it opens: "narrow" or "wide"
 width = 0.25              # wide view, as a share of the Claude pane (Claude always keeps 110 columns)
 icons = "auto"            # "auto": Nerd Font icons if one is installed, else plain symbols;
                           # or "nerd" / "unicode" / "text". Installed is not in use: if you see boxes, set "unicode"
@@ -152,10 +163,10 @@ plugin_buttons = true
      Claude Code only refreshes it when it asks for usage (for example when you run `/usage`), so it can be days old.
 
   The header says how old the numbers are, and a window whose reset time has passed shows `?` rather than a stale number.
-- **Sends keys** to the Claude pane only to scroll it (PageUp / PageDown / Ctrl+Home / Ctrl+End / mouse wheel).
-  It never types into the prompt.
-- **Checks for updates** every 5 seconds by reading herdr's own `plugins.json` and the modification times of its
-  code files. Nothing goes over the network.
+- **Sends keys** to the Claude pane to scroll it (PageUp / PageDown / Ctrl+Home / Ctrl+End / mouse wheel). It types
+  into the prompt only when you pick another account from the header: `/exit`, then the restart command.
+- **Checks for updates** by reading herdr's own `plugins.json` and the modification time of its own binary.
+  Nothing goes over the network.
 - Its own state lives in the plugin's state directory (`~/.local/state/herdr/plugins/statetrail/`).
 
 ## Fresh quota without credentials: the status line bridge (optional)
@@ -187,7 +198,7 @@ nothing. If you would rather not have that line, skip the bridge and use `live_u
   clicking them tells you instead of scrolling forever.
 - **Full height** means the full height of the Claude pane; if you split the Claude pane horizontally, the trail
   is as tall as the Claude part.
-- Only Claude Code for now. The transcript reader is a separate layer (`core/transcript.py`) so other agents can follow.
+- Only Claude Code for now. The transcript reader is a separate layer (`src/transcript.rs`) so other agents can follow.
 
 ## Roadmap
 
@@ -198,11 +209,12 @@ nothing. If you would rather not have that line, skip the bridge and use `live_u
 
 ## How it works
 
-Each trail is one small Python process plus an fzf. It subscribes to herdr's events for its Claude pane
-(status changes, pane closed) and sleeps otherwise — about 0.1% of one core while idle. Reading and scrolling
-Claude's screen go through herdr's socket. `core/` holds everything that is not herdr-specific
-(transcripts, quota, rendering, the jump algorithm); `trail.py` is the herdr side.
+Each trail is one small Rust program (about 1 MB on disk, about 7 MB of memory; 26 open trails measured 0% CPU
+together while idle). It subscribes to herdr's events for its Claude pane (status changes, pane closed) and sleeps
+otherwise. Reading and scrolling Claude's screen go through herdr's socket. `src/transcript.rs`, `claude.rs`,
+`render.rs` and `jump.rs` are not herdr-specific (transcripts, quota, rendering, the jump algorithm); `pane.rs` and
+`herdr.rs` are the herdr side. Version 0.1.x was Python + fzf; 0.2 is the same plugin rewritten in Rust.
 
 ## License
 
-MIT. The theme palettes in `themes.json` are extracted from herdr (Apache-2.0).
+MIT. The theme palettes in `src/themes.json` are extracted from herdr (Apache-2.0).
