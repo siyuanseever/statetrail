@@ -126,6 +126,11 @@ herdr plugin install siyuanseever/statetrail/herdr
 - **2026-10-27 起模型、effort、ultracode 只显示，不能点**，表头里能点的只剩账号（连 ⇄）。用户原话「我切换模型咋没反应呢」「有反应之后他一直在滚动 conversation 历史」「如果我们做的体验不好就不要做可交互了」。原因：只改这个会话的模型，只有 Claude 的 /model 选择框能做到（带参数的 `/model sonnet` 会存成新会话默认，两个账号共用），轨迹只能替用户打 /model、按 ↑↓←→、按 s，屏幕跟着动；Claude 在跑时还按不了，窄版当时只画一个「!」，看着像没反应。`statetrail set` 命令行还留着（`switch::set_model` / `set_ultracode`），轨迹不再调。
 - 窄版的提示（换账号的进展、失败原因）按宽度折到按钮下面、最多三行，不再只画一个「!」。
 - 窄版 5h / 7d 百分比后面跟着还有多久重置（「 9%  2h41m」「36%  2d12h」，格式和宽版一样，用户原话「额度还剩多久更新」）；读不到重置时间就不写。
+- **轨迹跟着 Claude 的屏幕选中**（2026-10-28，用户「根据我在 Claude Code 里查看的历史消息或者最新底部，来更新右侧轨迹的选中区域」「我们找一个不太消耗的方式，如果特别消耗我们就不做」）：
+  焦点在这一对 Claude / 轨迹上（订阅的 `pane.focused` 事件，启动时看 `pane.get` 的 focused）时，每 0.5 秒 `pane.read` 一次 Claude 的屏幕；屏幕哈希没变就不认、不重画。
+  没有「Jump to bottom」= 在最底 → 选中最新一轮；往上翻着 → `jump::located_rows` 找屏幕上最上面露出开头的那一轮，开头在下半屏就算上一轮；都没露出开头就不动。
+  选中的那一轮不在列表可见范围就滚过去。点一轮替 Claude 翻屏的那 7 秒内不跟。实测：用户在 w2:p5 往上翻时 w2:pB 的选中从 173 跟到 174；
+  26 个轨迹 20 秒共用 0.19 CPU 秒，跟着的那个 0.02（单核约 0.1%），其余每个 ≤0.01（和没这功能时一样，在处理焦点事件）。
 
 来自迁移会话留下的交接（`docs/HANDOFF-2026-10-26-herdr.md`，已并进这里、删掉）。本机现在装的就是这个目录：
 `herdr plugin link ~/projects/statetrail/herdr`（10-28 之前是 `herdr-rs`）。link 的目录 `herdr plugin update` 管不到，有新提交要本地

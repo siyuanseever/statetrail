@@ -22,6 +22,9 @@ statetrail is for the session you are in: it stays beside the live Claude and fo
   line below it say how many turns are out of view (in the narrow view `▲12` gets the last header row to itself and
   `▼5` sits on the bottom row); click one to page by a screenful. They sit on the left, in line with the bars, in a
   slot that stays when a side runs out, so nothing next to them moves while you page.
+- **Follows where you are in Claude.** Scroll Claude's own screen up and the trail marks the turn you are reading
+  (and pages to it); back at the bottom it marks the latest turn. Only the trail next to the Claude you are in does
+  this, reading Claude's screen twice a second (about 0.1% of one core); every other trail stays asleep.
 - **Model, account, quota.** `ctx`, `5h` and `7d` bars, grey while things are fine and coloured only when they
   are not: a quota bar turns orange or red when you are using it faster than the window passes, not just when it is
   high. Each quota also says how long until its window resets (`2h41m`, `2d12h`). Two Claude accounts at once
@@ -202,7 +205,6 @@ nothing. If you would rather not have that line, skip the bridge and use `live_u
 
 ## Roadmap
 
-- Show where Claude's screen is now, as a marker in the list
 - Tokens per turn; expand a turn's tool calls; mark where `/compact` happened
 - Search across sessions
 - Other agents (Codex, OpenCode)

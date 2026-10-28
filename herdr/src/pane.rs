@@ -26,6 +26,9 @@ use crate::ui::{self, Item};
 use crate::{Config, FRAME, WIDE_MIN, claude, herdr};
 
 const TICK: Duration = Duration::from_secs(60); // 没有事件时多久醒一次
+// 焦点在这一对 Claude / 轨迹上时，多久读一次 Claude 的屏幕、看它停在哪一轮（用户 2026-10-28：「根据我在 Claude Code 里
+// 查看的历史消息或者最新底部，更新右侧轨迹的选中」）。别的轨迹不读：一次读屏约 4KB、走 socket 不到 1ms
+const FOLLOW_EVERY: Duration = Duration::from_millis(500);
 const AGENT_CHECK: Duration = Duration::from_secs(5); // Claude 退出了却没等到事件：这么久补查一次
 const GONE_GRACE: Duration = Duration::from_secs(2); // Claude 退出后过这么久就关掉轨迹，不留残骸
 const WHEEL: usize = 3; // 滚轮一格翻几项
@@ -97,6 +100,10 @@ struct Trail {
     flash: Option<(String, Instant)>,
     offset: usize,
     follow: bool, // 停在最底：列表变长时跟着走
+    pair_focused: bool,          // herdr 的焦点在这个 Claude 或这个轨迹上：只有这时才跟着 Claude 的屏幕走
+    last_screen: u64,            // 上次读到的 Claude 屏幕（哈希）：没变就不用再认
+    jumping_until: Option<Instant>, // 点了一轮、正在替 Claude 翻屏：这期间不跟，免得和翻屏打架
+    reveal: bool,                // 选中的那一轮刚被跟着换了：画的时候把它滚进列表的可见范围
     no_claude_since: Option<Instant>,
     jump_token: Arc<AtomicUsize>,
     last_wide: Option<i64>,
@@ -174,6 +181,9 @@ impl Trail {
         let Some(info) = herdr::pane_info(&self.target) else { return false };
         self.name_tab(&info);
         self.status = info["agent_status"].as_str().map(str::to_owned);
+        if info["focused"].as_bool() == Some(true) {
+            self.pair_focused = true;
+        }
         if info["agent"].as_str() == Some("claude") {
             if self.no_claude_since.take().is_some() && self.sid.is_some() {
                 // Claude 退出又起来了（比如换账号 --resume 同一个会话）：会话 id 可能没变，配置目录要重认
@@ -312,6 +322,45 @@ impl Trail {
     }
 
     /// 点 ▲ / ▼：翻一屏的轮数，少翻一项留一轮重叠（边上那一轮常常只露出半截）。
+    /// 读一次 Claude 的屏幕，看它停在哪一轮，把选中挪过去。在最底就是最新一轮；往上翻着就是屏幕上最上面露出开头的那一轮，
+    /// 它的开头已经在屏幕下半截时算上一轮（你看的多半是上一轮的结尾）；一轮的开头都没露出来（长回复的中段）就不动。
+    /// 选中换了返回 true。
+    fn follow_screen(&mut self) -> bool {
+        if self.jumping_until.is_some_and(|t| Instant::now() < t) {
+            return false;
+        }
+        let Some(tr) = &self.tr else { return false };
+        let screen = HerdrTerm { pane: self.target.clone(), height: 0 }.screen();
+        let hash = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            screen.hash(&mut h);
+            h.finish()
+        };
+        if screen.is_empty() || std::mem::replace(&mut self.last_screen, hash) == hash {
+            return false;
+        }
+        let stops = tr.visible();
+        let Some(last) = stops.len().checked_sub(1) else { return false };
+        let idx = if jump::at_bottom(&screen) {
+            Some(last)
+        } else {
+            let replies: Vec<&str> = stops.iter().map(|s| s.reply.as_str()).collect();
+            let half = screen.lines().count() / 2;
+            jump::located_rows(&screen, &jump::needles_of(&replies))
+                .into_iter()
+                .min_by_key(|&(_, row)| row)
+                .map(|(i, row)| if row > half && i > 0 { i - 1 } else { i })
+        };
+        let Some(i) = idx else { return false };
+        if self.opened.as_deref() == Some(stops[i].id.as_str()) {
+            return false;
+        }
+        self.opened = Some(stops[i].id.clone());
+        self.reveal = true;
+        true
+    }
+
     fn page(&mut self, d: i32) {
         let step = self.view.2.saturating_sub(1).max(1);
         if d < 0 {
@@ -845,6 +894,7 @@ impl Trail {
         let ids: Vec<String> = stops.iter().map(|s| s.id.clone()).collect();
         let (tx, cur) = (tx.clone(), self.jump_token.clone());
         let (sid, target, n, of) = (self.sid.clone(), self.target.clone(), idx + 1, stops.len());
+        self.jumping_until = Some(Instant::now() + Duration::from_secs(7)); // 翻屏最多 6 秒
         std::thread::spawn(move || {
             let t0 = Instant::now();
             let refs: Vec<&str> = replies.iter().map(String::as_str).collect();
@@ -989,6 +1039,10 @@ pub fn run(cfg: Config) {
         flash: None,
         offset: 0,
         follow: true,
+        pair_focused: false,
+        last_screen: 0,
+        jumping_until: None,
+        reveal: false,
         no_claude_since: None,
         jump_token: Arc::new(AtomicUsize::new(0)),
         last_wide: None,
@@ -1066,6 +1120,7 @@ fn run_loop(
     let start = Instant::now();
     let mut due: Vec<Instant> = [200, 1000, 2000].iter().map(|ms| start + Duration::from_millis(*ms)).collect();
     let mut next_tick = Instant::now() + TICK;
+    let mut next_follow = Instant::now();
     let mut next_check = Instant::now() + AGENT_CHECK;
     let mut redraw = true;
     loop {
@@ -1133,6 +1188,16 @@ fn run_loop(
                     s.offset = bottom;
                 }
                 s.offset = s.offset.min(bottom);
+                // 选中跟着 Claude 的屏幕换了：不在露出来的范围里就滚过去（停在它上面一项）
+                if s.reveal
+                    && let Some(k) = items
+                        .iter()
+                        .position(|it| matches!(it, Item::Stop(i) if Some(stops[*i].id.as_str()) == view.opened))
+                    && !ui::visible(&view, &items, s.offset, rows, room).contains(&items[k])
+                {
+                    s.offset = k.saturating_sub(1).min(bottom);
+                    s.follow = s.offset >= bottom;
+                }
                 counts = ui::view_counts(&view, &ui::visible(&view, &items, s.offset, rows, room));
                 slot = if counts.0 > 0 || counts.1 > 0 {
                     unicode_width::UnicodeWidthStr::width(format!("▼{}{}", if narrow { "" } else { " " }, stops.len()).as_str())
@@ -1145,6 +1210,7 @@ fn run_loop(
                 }
                 foot_len = want;
             }
+            s.reveal = false;
             s.view = counts;
             let tag = |arrow: &str, n: usize| {
                 if n > 0 {
@@ -1218,7 +1284,13 @@ fn run_loop(
         if let Some(t) = s.tool_check {
             wake = wake.min(t);
         }
+        // 只为跟 Claude 的屏幕醒来、选中又没变时不重画（重画要读额度文件）
+        let follow_only = s.pair_focused && next_follow < wake;
+        if s.pair_focused {
+            wake = wake.min(next_follow);
+        }
         let msg = rx.recv_timeout(wake.saturating_duration_since(now));
+        let timed_out = matches!(msg, Err(mpsc::RecvTimeoutError::Timeout));
         let mut stale = false;
         match msg {
             Ok(Msg::Input(Event::Mouse(m))) => match {
@@ -1332,6 +1404,7 @@ fn run_loop(
                     let _ = herdr::call("pane.focus", json!({"pane_id": s.target}));
                 }
                 if name == "pane_focused" {
+                    s.pair_focused = pane == s.target || pane == s.me;
                     if s.tool.as_ref().is_some_and(|(p, _)| p != pane) && !s.tool_sticky {
                         s.tool_check = Some(now + Duration::from_millis(400));
                     }
@@ -1366,6 +1439,7 @@ fn run_loop(
                 continue;
             }
             Ok(Msg::Jumped(ids, how)) => {
+                s.jumping_until = None;
                 for id in ids.split(',') {
                     if how == "found" {
                         s.missing.remove(id);
@@ -1380,6 +1454,12 @@ fn run_loop(
         let now = Instant::now();
         if s.tool_check.is_some_and(|t| now >= t) {
             s.check_tool();
+        }
+        if s.pair_focused && now >= next_follow {
+            next_follow = now + FOLLOW_EVERY;
+            if !s.follow_screen() && timed_out && follow_only {
+                redraw = false;
+            }
         }
         if now >= next_tick {
             next_tick = now + TICK;

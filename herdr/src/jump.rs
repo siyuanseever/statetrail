@@ -92,6 +92,21 @@ pub fn locate(screen: &str, needles: &[String]) -> Vec<usize> {
         .collect()
 }
 
+/// 屏幕上有哪几轮回复的开头、各在第几行（行号从 0 数，按屏幕原样的行；你自己的话不算）。
+pub fn located_rows(screen: &str, needles: &[String]) -> Vec<(usize, usize)> {
+    let rows: Vec<String> =
+        screen.lines().map(|l| if l.trim_start().starts_with(PROMPT) { String::new() } else { norm(l) }).collect();
+    (0..needles.len())
+        .filter(|&i| !needles[i].is_empty())
+        .filter_map(|i| rows.iter().position(|r| r.contains(&needles[i])).map(|r| (i, r)))
+        .collect()
+}
+
+/// Claude 的屏幕停在最底（没往上翻）。
+pub fn at_bottom(screen: &str) -> bool {
+    !screen.contains(AT_BOTTOM)
+}
+
 pub fn jump(term: &dyn Term, replies: &[&str], idx: usize, cancelled: &dyn Fn() -> bool) -> Outcome {
     let target = needle(replies[idx]);
     let needles = needles_of(replies);
