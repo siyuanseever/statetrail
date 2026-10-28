@@ -5,9 +5,9 @@
 # 开着的轨迹试跑新程序失败，就不会原地换上它
 id = "statetrail"
 name = "statetrail"
-version = "0.2.0-dev"
+version = "0.2.0-rc.1"
 min_herdr_version = "0.9.5"
-description = "Claude Code session trail docked to the right of the Claude pane (Rust rewrite, in development)."
+description = "Every turn of your Claude Code session, docked next to the running Claude: click one and Claude scrolls to it."
 platforms = ["macos", "linux"]
 
 # herdr plugin install 时跑：按 version 从 GitHub Release 下这个平台编好的 bin/statetrail，下不到就用 cargo 就地编。
