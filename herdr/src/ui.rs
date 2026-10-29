@@ -157,14 +157,16 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
         Item::Chapter(ci) => {
             let ch = &v.chapters[ci];
             let open = v.open.get(ci) == Some(&true);
-            let arrow = Span::styled(if open { "▾ " } else { "▸ " }, Style::default().fg(c.accent));
-            let bold = Style::default().add_modifier(Modifier::BOLD);
+            // 章名只是辅助：整行灰色，不加粗；你主要看的是轮次，轮次用正常的深色字（用户 2026-10-29：「暗色应该用在 Conversation，
+            // 浅色应该用在章节，因为章节只是起辅助作用」）
+            let aux = Style::default().fg(c.grey); // 中间那档灰：比轮次的字淡，又不像 dim 那样暗到读不出来
+            let arrow = Span::styled(if open { "▾ " } else { "▸ " }, aux);
             let n = ch.end - ch.start;
             if v.narrow {
                 // 收着时在后面写这一章有几轮
                 let tail = if open { String::new() } else { format!(" {n}") };
                 let title = clip(&ch.title, room.saturating_sub(2 + tail.width()), false);
-                return vec![Line::from(vec![arrow, Span::styled(title, bold), Span::styled(tail, dimc)])];
+                return vec![Line::from(vec![arrow, Span::styled(title, aux), Span::styled(tail, aux)])];
             }
             let range = if n > 1 {
                 t("第 {a}–{b} 轮").replace("{a}", &(ch.start + 1).to_string()).replace("{b}", &ch.end.to_string())
@@ -173,7 +175,7 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
             };
             let meta = format!("  {range} · {}", when(v.stops[ch.start].ts.as_deref()));
             let title = clip(&ch.title, room.saturating_sub(2 + meta.width().min(room / 2)), true);
-            vec![Line::from(vec![arrow, Span::styled(title, bold), Span::styled(clip(&meta, room / 2, true), faint)])]
+            vec![Line::from(vec![arrow, Span::styled(title, aux), Span::styled(clip(&meta, room / 2, true), faint)])]
         }
         Item::Stop(i) => {
             let st = v.stops[i];
