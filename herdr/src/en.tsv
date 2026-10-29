@@ -100,3 +100,11 @@ Claude 正在工作或等你确认，等它停下再换	Claude is busy or waitin
 1 轮	1 turn
 {n} 处	{n} hits
 没有	no match
+建索引 {i}/{n}	indexing {i}/{n}
+全部会话 · Tab 回到这个会话	all sessions · Tab for this one
+Tab 搜全部会话	Tab: all sessions
+全部会话 · {n} 处	all sessions · {n} hits
+第 {n} 轮	turn {n}
+开着	open
+正在读本机的会话记录…	reading session logs…
+打字搜本机所有会话里你说过的话	type to search what you said in every session

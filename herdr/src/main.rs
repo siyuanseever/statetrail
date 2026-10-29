@@ -10,6 +10,7 @@ mod jump;
 mod pane;
 mod picker;
 mod render;
+mod search;
 mod switch;
 mod theme;
 mod tools;
@@ -361,6 +362,7 @@ fn main() {
         Some("auto") => cmd_auto(&cfg),
         Some("toggle") => cmd_toggle(&cfg),
         Some("pickrepo") => picker::cmd_pickrepo(&std::env::args().nth(2).unwrap_or_default()),
+        Some("find") => search::cmd_find(&std::env::args().skip(2).collect::<Vec<_>>().join(" ")),
         Some("switch") => switch::cmd_switch(&std::env::args().skip(2).collect::<Vec<_>>()),
         // 只改这个会话：statetrail set <窗格> model <opus|fable|sonnet|haiku> | effort <low…max> | ultracode <on|off>
         Some("set") => {

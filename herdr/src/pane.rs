@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -20,11 +20,12 @@ use crate::i18n::t;
 use crate::chapters::{self, Chapter, Marks};
 use crate::jump::{self, Outcome, Term};
 use crate::render;
+use crate::search;
 use crate::switch;
 use crate::ui::matches as hit;
 use unicode_width::UnicodeWidthStr;
 use crate::tools::{self, Plugin, sh_quote};
-use crate::transcript::Transcript;
+use crate::transcript::{Stop, Transcript};
 use crate::ui::{self, Item};
 use crate::{Config, FRAME, WIDE_MIN, claude, herdr};
 
@@ -47,6 +48,8 @@ enum Msg {
     Wake,                              // 后台查完额度了：重画
     PluginTab(String, String, String), // (插件, 动作, 它开出来的标签页)
     Classified(bool),                  // 后台分完一批章（成功没有）：重读分章文件
+    Indexing(usize, usize),            // 跨会话搜索在建索引：(已读, 总数)
+    Indexed(Vec<search::Session>),     // 索引建好了
 }
 
 fn sock_of(pane: &str) -> PathBuf {
@@ -114,6 +117,14 @@ struct Trail {
     chaps: Vec<Chapter>,         // 上一帧切出来的章（点击时按它认）
     chap_open: Vec<bool>,        // 上一帧每一章展没展开
     search: Option<String>,      // 按 / 打开的搜索：在搜的字（None = 没在搜）
+    everywhere: bool,            // 搜索框里按了 Tab：搜本机所有会话（轨迹窗格临时放大）
+    index: Option<Vec<search::Session>>, // 跨会话搜索的索引：搜索关掉就扔
+    indexing: Option<(usize, usize)>,
+    found_sel: usize,
+    found_off: usize,
+    found_rows: Vec<(u16, usize)>, // 跨会话结果：屏幕第几行是第几条
+    open_sids: HashMap<String, (String, String)>, // 开着的会话：会话 id → (Claude 窗格, 标签页)
+    goto: Option<(String, Instant)>, // 别处搜到了这个会话的某一轮（轮次 id）：会话读到它就跳过去
     outline: bool,               // 在章那一层：所有章收着，选中按章挪（← 进来，→ / Enter 出去）
     classifying: bool,           // 正在后台调 Haiku 分章
     next_classify: Instant,
@@ -216,6 +227,17 @@ impl Trail {
             self.follow = true;
             self.outline = false;
             self.marks = self.sid.as_deref().map(Marks::load).unwrap_or_default();
+            // 别的轨迹搜到了这个会话、新开标签页恢复它：读它留下的那一轮（两分钟内的才算）
+            if let Some(sid) = &self.sid {
+                let f = crate::run_dir().join("goto").join(sid);
+                let fresh = std::fs::metadata(&f).ok().and_then(|m| m.modified().ok()).and_then(|t| t.elapsed().ok());
+                if let (Some(age), Ok(id)) = (fresh, std::fs::read_to_string(&f)) {
+                    if age < Duration::from_secs(120) {
+                        self.goto = Some((id.trim().to_owned(), Instant::now()));
+                    }
+                    let _ = std::fs::remove_file(&f);
+                }
+            }
             if self.sid.is_some() {
                 self.cfg_dir = claude::config_dir_of_pid(herdr::claude_pid(&self.target));
             }
@@ -379,6 +401,11 @@ impl Trail {
     /// 选中往上 / 往下挪几格（滚轮一格一格，↑↓ 也是），列表跟着滚到它（用户 2026-10-29：「不要鼠标滚动翻页的效果，
     /// 而是鼠标滚动时选中项上下移动」「键盘也不能操作滚动」「enter 来确认跳转」）。只挪选中，不跳：按 Enter 才让 Claude 跳过去。
     fn move_sel(&mut self, d: isize) {
+        if self.everywhere {
+            let n = self.found().len();
+            self.found_sel = self.found_sel.saturating_add_signed(d).min(n.saturating_sub(1));
+            return;
+        }
         let Some(tr) = &self.tr else { return };
         let stops = tr.visible();
         let Some(last) = stops.len().checked_sub(1) else { return };
@@ -424,10 +451,9 @@ impl Trail {
     fn search_key(&mut self, code: KeyCode, tx: &Sender<Msg>) -> bool {
         let page = self.view.2.saturating_sub(1).max(1) as isize;
         match code {
-            KeyCode::Esc => {
-                self.search = None;
-                self.reveal = true;
-            }
+            KeyCode::Esc => self.close_search(),
+            KeyCode::Tab => self.set_everywhere(!self.everywhere, tx),
+            KeyCode::Enter if self.everywhere => self.open_found(self.found_sel, tx),
             KeyCode::Enter => {
                 let q = self.query();
                 let Some(tr) = &self.tr else { return false };
@@ -444,6 +470,7 @@ impl Trail {
                     q.pop();
                 }
                 self.pick_hit();
+                self.found_sel = 0;
             }
             KeyCode::Up => self.move_sel(-1),
             KeyCode::Down => self.move_sel(1),
@@ -454,10 +481,112 @@ impl Trail {
                     q.push(c);
                 }
                 self.pick_hit();
+                self.found_sel = 0;
             }
             _ => return false,
         }
         true
+    }
+
+    /// 关掉搜索：跨会话的话把窗格缩回去、扔掉索引；选中留在原处
+    fn close_search(&mut self) {
+        if self.everywhere {
+            self.set_zoom(false);
+        }
+        self.everywhere = false;
+        self.index = None;
+        self.search = None;
+        self.reveal = true;
+    }
+
+    fn set_zoom(&self, on: bool) {
+        let _ = herdr::call("pane.zoom", json!({"pane_id": self.me, "mode": if on { "on" } else { "off" }}));
+    }
+
+    /// 跨会话 / 只搜这个会话 来回切（搜索框里按 Tab）。切过去时窗格放大（细条放不下哪个项目、哪个会话），在后台更新索引
+    fn set_everywhere(&mut self, on: bool, tx: &Sender<Msg>) {
+        self.everywhere = on;
+        self.set_zoom(on);
+        if !on {
+            self.reveal = true;
+            return;
+        }
+        self.found_sel = 0;
+        self.found_off = 0;
+        self.open_sids = herdr::call("pane.list", json!({}))
+            .ok()
+            .and_then(|r| r["panes"].as_array().cloned())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|p| {
+                let sid = p["agent_session"]["value"].as_str()?;
+                Some((sid.to_owned(), (p["pane_id"].as_str()?.to_owned(), p["tab_id"].as_str().unwrap_or("").to_owned())))
+            })
+            .collect();
+        if self.indexing.is_none() {
+            self.indexing = Some((0, 0));
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let mut last = Instant::now();
+                let all = search::update(|i, n| {
+                    if last.elapsed() > Duration::from_millis(200) {
+                        last = Instant::now();
+                        let _ = tx.send(Msg::Indexing(i, n));
+                    }
+                });
+                let _ = tx.send(Msg::Indexed(all));
+            });
+        }
+    }
+
+    /// 跨会话搜到的结果
+    fn found(&self) -> Vec<(&search::Session, &search::Turn)> {
+        self.index.as_deref().map_or_else(Vec::new, |all| search::find(all, &self.query(), 300))
+    }
+
+    /// 打开第 k 条结果：是这个会话就直接跳；开在别的窗格里就切过去，让那边的轨迹跳；没开就新开一个标签页恢复那个会话，
+    /// 它的轨迹读到那一轮再跳
+    fn open_found(&mut self, k: usize, tx: &Sender<Msg>) {
+        let Some((sid, id, cwd, cfg, label)) = self.found().get(k).map(|(s, t)| {
+            let proj = Path::new(&s.cwd).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            (s.sid.clone(), t.id.clone(), s.cwd.clone(), s.cfg_dir.clone(), s.title.clone().unwrap_or(proj))
+        }) else {
+            return;
+        };
+        self.close_search();
+        if self.sid.as_deref() == Some(sid.as_str()) {
+            let i = self.tr.as_ref().and_then(|tr| tr.visible().iter().position(|st| st.id == id));
+            if let Some(i) = i {
+                self.opened = Some(id);
+                self.jump(i, tx);
+            }
+            return;
+        }
+        if let Some((pane, tab)) = self.open_sids.get(&sid).cloned() {
+            let _ = herdr::call("tab.focus", json!({"tab_id": tab}));
+            let _ = herdr::call("pane.focus", json!({"pane_id": pane}));
+            if let Some(sb) = crate::sidebars().into_iter().find(|(_, t)| *t == pane).map(|(sb, _)| sb) {
+                send_command(&sb, &format!("goto {id}"));
+            }
+            return;
+        }
+        // 没开着：记下要跳的那一轮，新开标签页恢复会话；那边的轨迹认出会话后读这个文件
+        let dir = crate::run_dir().join("goto");
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join(&sid), &id);
+        let mut env = json!({});
+        if cfg != claude::default_cfg() {
+            env["CLAUDE_CONFIG_DIR"] = json!(cfg);
+        }
+        let ws = herdr::pane_info(&self.me).and_then(|p| p["workspace_id"].as_str().map(str::to_owned));
+        match herdr::call("tab.create", json!({"cwd": cwd, "label": label, "focus": true, "env": env, "workspace_id": ws})) {
+            Ok(r) => {
+                if let Some(p) = r["root_pane"]["pane_id"].as_str() {
+                    let _ = herdr::call("pane.send_text", json!({"pane_id": p, "text": format!("claude --resume {sid}\r")}));
+                }
+            }
+            Err(e) => self.say(format!("{e}"), Duration::from_secs(4)),
+        }
     }
 
     /// 选中的那一轮所在的章是收着的：返回那一章
@@ -1279,6 +1408,14 @@ pub fn run(cfg: Config) {
         chap_open: Vec::new(),
         outline: false,
         search: None,
+        everywhere: false,
+        index: None,
+        indexing: None,
+        found_sel: 0,
+        found_off: 0,
+        found_rows: Vec::new(),
+        open_sids: HashMap::new(),
+        goto: None,
         classifying: false,
         next_classify: Instant::now(),
         no_claude_since: None,
@@ -1384,11 +1521,28 @@ fn run_loop(
         if s.flash.as_ref().is_some_and(|(_, until)| Instant::now() >= *until) {
             s.flash = None;
         }
+        // 有要跳的一轮（别处搜到的）：会话读到它就跳；一分钟还没读到就算了
+        if let Some((id, at)) = s.goto.clone() {
+            let i = s.tr.as_ref().and_then(|tr| tr.visible().iter().position(|st| st.id == id));
+            if let Some(i) = i {
+                s.goto = None;
+                s.opened = Some(id);
+                s.reveal = true;
+                s.follow = false;
+                s.jump(i, tx);
+            } else if at.elapsed() > Duration::from_secs(60) {
+                s.goto = None;
+            }
+        }
         if std::mem::replace(&mut redraw, true) {
             let (model, ctx) = s.model_ctx();
             let usage = claude::read_usage(&s.cfg_dir, s.sid.as_deref(), s.cfg.live_usage);
             let stops = s.tr.as_ref().map(|t| t.visible()).unwrap_or_default();
             let chaps = if s.cfg.chapters == "off" { Vec::new() } else { s.marks.chapters(&stops) };
+            // 跨会话搜索时列表那块画结果（draw_found），这个会话的轮次一条都不列
+            let none: Vec<&Stop> = Vec::new();
+            let listed: &[&Stop] = if s.everywhere { &none } else { &stops };
+            let chaps = if s.everywhere { Vec::new() } else { chaps };
             // 同时只展开一章：选中的那一轮所在的章，别的章都收着（用户 2026-10-29：「同时只会有一个章节被展开，其他章节全部都是折叠的」；
             // 之前说的「默认不要折叠」是在还不能按章挪的时候）。在章那一层（←）全部收着。没选中时算最新一轮
             let query = s.query();
@@ -1401,7 +1555,7 @@ fn run_loop(
                 .map(|c| !s.outline && (c.start..c.end).contains(&sel) || !query.is_empty())
                 .collect();
             let view = ui::View {
-                stops: &stops,
+                stops: listed,
                 narrow,
                 expanded: s.expanded,
                 opened: s.opened.as_deref(),
@@ -1496,12 +1650,38 @@ fn run_loop(
             let accts = [claude::current_account(&s.cfg_dir), claude::short_account(&s.cfg_dir)];
             s.hot = header::hot_spots(&head, &accts);
             s.up_at = (slot > 0 && counts.0 > 0).then_some((head.len(), slot));
+            let found: Vec<ui::Found> = s
+                .found()
+                .iter()
+                .map(|(ss, tt)| {
+                    let proj = Path::new(&ss.cwd).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    let mut meta = vec![proj];
+                    meta.extend(ss.title.clone());
+                    meta.push(ui::when(tt.ts.as_deref()));
+                    meta.push(t("第 {n} 轮").replace("{n}", &(tt.n + 1).to_string()));
+                    ui::Found {
+                        text: tt.prompt.clone(),
+                        meta: meta.join(" · "),
+                        open: s.sid.as_deref() != Some(ss.sid.as_str()) && s.open_sids.contains_key(&ss.sid),
+                    }
+                })
+                .collect();
             // 搜索框：表头最后一行，「/ 字▏  3 处」；窄版只写数字
             if let Some(q) = &s.search {
                 let th = crate::theme::colors();
-                let n = if query.is_empty() { 0 } else { (0..stops.len()).filter(|&i| view.hit(i)).count() };
-                let tail = if query.is_empty() {
-                    String::new()
+                let n = if s.everywhere {
+                    found.len()
+                } else if query.is_empty() {
+                    0
+                } else {
+                    (0..stops.len()).filter(|&i| view.hit(i)).count()
+                };
+                let tail = if let (true, Some((i, all))) = (s.everywhere, s.indexing) {
+                    t("建索引 {i}/{n}").replace("{i}", &i.to_string()).replace("{n}", &all.to_string())
+                } else if query.is_empty() {
+                    t(if s.everywhere { "全部会话 · Tab 回到这个会话" } else { "Tab 搜全部会话" })
+                } else if s.everywhere {
+                    t("全部会话 · {n} 处").replace("{n}", &n.to_string())
                 } else if n == 0 {
                     t("没有")
                 } else if narrow {
@@ -1549,8 +1729,22 @@ fn run_loop(
             s.foot_rows = rows;
             let mut drawn = None;
             let mut menu_hits = Vec::new();
+            let (mut found_rows, mut found_off) = (Vec::new(), s.found_off);
             term.draw(|f| {
-                drawn = Some(ui::draw(f, &head, &footer, &view, s.offset));
+                let d = ui::draw(f, &head, &footer, &view, s.offset);
+                if s.everywhere {
+                    let note = if s.index.is_none() {
+                        t("正在读本机的会话记录…")
+                    } else if query.is_empty() {
+                        t("打字搜本机所有会话里你说过的话")
+                    } else {
+                        t("没有")
+                    };
+                    let mut off = s.found_off;
+                    found_rows = ui::draw_found(f, d.list_top, d.footer_top.saturating_sub(1), &found, s.found_sel, &mut off, &query, &note);
+                    found_off = off;
+                }
+                drawn = Some(d);
                 // 能点的字：平时垫底色，鼠标停上去换强调色底（菜单开着时只亮菜单项）
                 let on = if s.menu.is_none() { s.hover.and_then(|h| s.hover_key(h)) } else { None };
                 for &(i, a, b) in &s.hot {
@@ -1562,6 +1756,8 @@ fn run_loop(
                 }
             })?;
             s.menu_hits = menu_hits;
+            s.found_rows = found_rows;
+            s.found_off = found_off;
             if let Some(d) = drawn {
                 s.hits = d.hits;
                 s.header_len = d.list_top.saturating_sub(1);
@@ -1664,6 +1860,11 @@ fn run_loop(
                         s.chapter_menu(it, m.column, m.row + 1);
                     }
                 }
+                MouseEventKind::Down(MouseButton::Left) if s.everywhere => {
+                    if let Some(&(_, k)) = s.found_rows.iter().find(|(row, _)| *row == m.row) {
+                        s.open_found(k, tx);
+                    }
+                }
                 MouseEventKind::Down(MouseButton::Left) => {
                     if let Some(&(_, it)) = s.hits.iter().find(|(row, _)| *row == m.row) {
                         match it {
@@ -1738,6 +1939,8 @@ fn run_loop(
                 match parts.as_slice() {
                     ["toggle"] => s.toggle(size.width),
                     // statetrail switch 换完账号：会话 id 没变，按新进程重认配置目录（账号、额度跟着变）
+                    // 别的轨迹的跨会话搜索选中了这个会话的一轮
+                    ["goto", id] => s.goto = Some(((*id).to_owned(), Instant::now())),
                     ["rescan"] => {
                         s.cfg_dir = claude::config_dir_of_pid(herdr::claude_pid(&s.target));
                     }
@@ -1750,6 +1953,13 @@ fn run_loop(
                 s.plugin_tabs.insert((plugin, action), tab);
                 redraw = false;
                 continue;
+            }
+            Ok(Msg::Indexing(i, n)) => s.indexing = Some((i, n)),
+            Ok(Msg::Indexed(all)) => {
+                s.indexing = None;
+                if s.everywhere {
+                    s.index = Some(all);
+                }
             }
             Ok(Msg::Classified(ok)) => {
                 s.classifying = false;

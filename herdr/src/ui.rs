@@ -215,7 +215,6 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
             } else {
                 t("（{p}）").replace("{p}", &st.prompt)
             };
-            let ask = near(&ask, v.query);
             let last_busy = v.busy && n == v.stops.len();
             let missing = v.missing.contains(&st.id);
             let dim = missing || st.compacted && !v.chapters.is_empty(); // 主界面里已经跳不过去
@@ -230,7 +229,8 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
                 // 分章时轮次也不缩进：细条本来就窄（用户 2026-10-29：「你不要右移，你就直接放到最左侧」）
                 let head = format!("{n} ");
                 let mut spans = vec![Span::styled(head.clone(), dimc)];
-                spans.extend(mark_hit(clip(&ask, room.saturating_sub(head.width()), false), v.query, style));
+                let w = room.saturating_sub(head.width());
+                spans.extend(mark_hit(clip(&near(&ask, v.query, w), w, false), v.query, style));
                 return vec![Line::from(spans)];
             }
             let mut gone = String::new();
@@ -262,7 +262,7 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
                 let rest = room.saturating_sub(meta.width() + 1);
                 let ask_style = if dim { faint } else { Style::default() };
                 let mut spans = vec![Span::styled(meta, faint), Span::raw(" ")];
-                spans.extend(mark_hit(clip(&ask, rest, true), v.query, ask_style));
+                spans.extend(mark_hit(clip(&near(&ask, v.query, rest), rest, true), v.query, ask_style));
                 lines.push(Line::from(spans));
             }
             lines.push(Line::from(Span::styled(clip(&format!("   {reply}"), room, true), faint)));
@@ -276,15 +276,16 @@ pub fn matches(st: &Stop, q: &str) -> bool {
     st.prompt.to_lowercase().contains(q) || st.reply.to_lowercase().contains(q)
 }
 
-/// 在搜时，命中的字在这一行后面露不出来：从命中处前几个字开始显示，前面写「…」
-fn near(text: &str, query: &str) -> String {
+/// 在搜时，命中的字在这一行（room 列宽）里露不出来：从命中处前两个字开始显示，前面写「…」；露得出来就照旧从头
+fn near(text: &str, query: &str, room: usize) -> String {
     if query.is_empty() {
         return text.to_owned();
     }
     let lower = text.to_lowercase();
     let Some(at) = lower.find(query) else { return text.to_owned() };
     let p = lower[..at].chars().count();
-    if p <= 6 {
+    let end: usize = text.chars().take(p + query.chars().count()).map(|c| c.width().unwrap_or(0)).sum();
+    if p <= 2 || end < room {
         return text.to_owned();
     }
     format!("…{}", text.chars().skip(p - 2).collect::<String>())
@@ -508,6 +509,57 @@ pub fn draw(f: &mut Frame, header: &[SLine], footer: &[SLine], v: &View, offset:
     }
 }
 
+/// 跨会话搜索的一条结果：你说的那句话，和它在哪（项目 · 会话标题 · 时间 · 第几轮）
+pub struct Found {
+    pub text: String,
+    pub meta: String,
+    pub open: bool, // 那个会话正开在某个窗格里
+}
+
+/// 跨会话搜索的结果盖在列表那块（top..bottom 行）上：一条两行，选中的画 ▌ 加底色，滚到选中的露出来。
+/// note 是没有结果时那一行灰字。返回每一行屏幕行是第几条（点击用）。
+pub fn draw_found(f: &mut Frame, top: u16, bottom: u16, items: &[Found], sel: usize, off: &mut usize, query: &str, note: &str) -> Vec<(u16, usize)> {
+    let c = colors();
+    let area = f.area();
+    let rect = Rect { x: area.x, y: top, width: area.width, height: bottom.saturating_sub(top) };
+    f.render_widget(ratatui::widgets::Clear, rect);
+    let room = area.width.saturating_sub(2) as usize;
+    let faint = Style::default().add_modifier(Modifier::DIM);
+    if items.is_empty() {
+        f.render_widget(Paragraph::new(Line::from(Span::styled(format!("  {note}"), faint))), rect);
+        return Vec::new();
+    }
+    let per = (rect.height as usize / 2).max(1);
+    if sel < *off {
+        *off = sel;
+    } else if sel >= *off + per {
+        *off = sel + 1 - per;
+    }
+    let mut lines = Vec::new();
+    let mut rows = Vec::new();
+    for (k, it) in items.iter().enumerate().skip(*off).take(per) {
+        let on = k == sel;
+        let bg = if on { c.selection.map_or_else(Style::default, |b| Style::default().bg(b)) } else { Style::default() };
+        let lead = if on { Span::styled("▌ ", Style::default().fg(c.accent)) } else { Span::raw("  ") };
+        let mut a = vec![lead.clone()];
+        a.extend(mark_hit(clip(&near(&oneline(&it.text), query, room), room, true), query, Style::default()));
+        let mut b = vec![lead, Span::styled(clip(&format!("   {}", it.meta), room.saturating_sub(4), true), faint)];
+        if it.open {
+            b.push(Span::styled(format!(" · {}", t("开着")), Style::default().fg(c.cyan)));
+        }
+        for mut spans in [a, b] {
+            let used: usize = spans.iter().map(|s| s.content.width()).sum();
+            if on && used < area.width as usize {
+                spans.push(Span::raw(" ".repeat(area.width as usize - used)));
+            }
+            rows.push((top + lines.len() as u16, k));
+            lines.push(Line::from(spans).patch_style(bg));
+        }
+    }
+    f.render_widget(Paragraph::new(lines), rect);
+    rows
+}
+
 /// 表头里点模型 / effort / 账号弹出来的下拉菜单：画在点的那段字正下方（x, y 是框左上角），一项一行，当前的打 ✔。
 /// herdr 的 popup 只能开在屏幕正中，所以自己画在轨迹里。
 pub struct Menu {
@@ -701,7 +753,8 @@ mod tests {
             query: "search",
         };
         assert!(matches!(v.items()[..], [Item::Chapter(0), Item::Stop(1)]));
-        assert!(near(&st[1].prompt, "search").starts_with("…到 Search"));
+        assert!(near(&st[1].prompt, "search", 20).starts_with("…到 Search"));
+        assert!(near(&st[1].prompt, "search", 80).starts_with("这一句"));
     }
 
     /// 收着的章：最右边写收了几轮，不写第几轮到第几轮

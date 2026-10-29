@@ -177,6 +177,20 @@ herdr plugin install siyuanseever/statetrail/herdr
   从命中处前 2 个字开始显示（「…」开头），命中的字涂强调色。打字时选中最新的一处；↑↓ / 滚轮在命中里挪；Enter 跳过去并关搜索；Esc 关搜索、选中留在原处。
   搜索开着时不跟 Claude 的屏幕。实测（w1:pA）：「章节」7 处、按章分组；「张杰」2 处，↑ 到第 41 轮；退格到空后 Esc 回到原样；
   「张杰」Enter → jump.log 记 turn 45 found 1.389 秒。
+- **跨会话搜索**（2026-10-29，用户「是不是要加入一个跨 Claude Code Session 的搜索功能，因为我也不知道我之前跟他发的那个消息到底是在哪个 Claude Code 的哪个位置了」）：
+  `src/search.rs`。入口放在会话内搜索框里按 Tab（不另做窗口）：细条 17 列放不下「项目 · 会话 · 时间 · 第几轮」，所以搜的时候用 herdr 的
+  `pane.zoom` 把轨迹放大到整个标签页，Esc / Enter 缩回。结果一条两行：你说的那句（命中涂色）、下面灰字「项目 · 会话标题 · 时间 · 第几轮」，
+  会话正开在别的窗格里的标「开着」；按那句话发的时间排，最近的在前，最多 300 条。只搜你说的话，不搜 Claude 的回复。
+  - 索引：本机会话记录 7.7 GB。每打一个字全读太慢，第一次读一遍只留你说的话，存 `search/index.v2.jsonl`，按文件大小 + 修改时间认，只重读变了的。
+    `~/.claude-l2/projects` 链到 `~/.claude/projects`，按真实路径去重（不去重时同一句出现两次）。脚本跑的 `claude -p` 会话（记录里 entrypoint = sdk-cli，
+    535 个里 473 个，日报、通讯录之类）不读：第一版没排除时搜「市场」96 处大半是它们。手开的是 cli / claude-desktop。
+    实测：全量建 4.2 秒、索引 1.9 MB、剩 54 个会话；之后增量 0.3～1.1 秒。轮次编号和轨迹一样（visible() 下标），跳过去对得上。
+  - Enter：这个会话就直接跳；开在别的窗格（pane.list 的 agent_session）就 tab.focus + pane.focus，再通过那边轨迹的 socket 发 `goto <轮次 id>`；
+    没开就在当前工作区 tab.create（cwd 是会话的目录，非默认账号带 CLAUDE_CONFIG_DIR）发 `claude --resume <id>`，并在 `run/goto/<会话 id>` 留下轮次，
+    新轨迹认出会话后两分钟内读到就跳。
+  - 顺手改了截断：命中词在这一行里露得出来就从头显示，露不出来才从命中处前两个字开始（之前宽版也截成「…布到市场里吧」）。
+  - 实测（w1:pA）：/ Tab「市场」→ 放大、6 条、按时间排、↓ 选第 2 条、Esc 缩回 41 列；对 w7:pK 的 socket 发 goto → 它选中第 257 轮并让 Claude 去翻
+    （太早，Claude 屏幕里没有，jump.log not-found；Claude 窗格回到最底）。**没测**：切到别的窗格（会挪用户的焦点）、新开标签页恢复会话、点结果。
 
 来自迁移会话留下的交接（`docs/HANDOFF-2026-10-26-herdr.md`，已并进这里、删掉）。本机现在装的就是这个目录：
 `herdr plugin link ~/projects/statetrail/herdr`（10-28 之前是 `herdr-rs`）。link 的目录 `herdr plugin update` 管不到，有新提交要本地
