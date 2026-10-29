@@ -162,20 +162,27 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
             let aux = Style::default().fg(c.grey); // 中间那档灰：比轮次的字淡，又不像 dim 那样暗到读不出来
             let arrow = Span::styled(if open { "▾ " } else { "▸ " }, aux);
             let n = ch.end - ch.start;
+            // 章名后面用实线补满整行：章名是一条分节线，和回复那一行（文字）、轮与轮之间的虚线形状都不一样
+            // （用户 2026-10-29：宽版「回答的视觉效果跟章节一样」「轮之间的分割线和章节的分割线一模一样，没法区分每个章节」）
+            let rule = |used: usize| Span::styled(if room > used + 1 { format!(" {}", "─".repeat(room - used - 1)) } else { String::new() }, dimc);
             if v.narrow {
                 // 收着时在后面写这一章有几轮
                 let tail = if open { String::new() } else { format!(" {n}") };
                 let title = clip(&ch.title, room.saturating_sub(2 + tail.width()), false);
-                return vec![Line::from(vec![arrow, Span::styled(title, aux), Span::styled(tail, aux)])];
+                let used = 2 + title.width() + tail.width();
+                return vec![Line::from(vec![arrow, Span::styled(title, aux), Span::styled(tail, aux), rule(used)])];
             }
             let range = if n > 1 {
                 t("第 {a}–{b} 轮").replace("{a}", &(ch.start + 1).to_string()).replace("{b}", &ch.end.to_string())
             } else {
                 t("第 {a} 轮").replace("{a}", &(ch.start + 1).to_string())
             };
-            let meta = format!("  {range} · {}", when(v.stops[ch.start].ts.as_deref()));
-            let title = clip(&ch.title, room.saturating_sub(2 + meta.width().min(room / 2)), true);
-            vec![Line::from(vec![arrow, Span::styled(title, aux), Span::styled(clip(&meta, room / 2, true), faint)])]
+            let at = when(v.stops[ch.start].ts.as_deref());
+            let meta = if at.is_empty() { format!("  {range}") } else { format!("  {range} · {at}") };
+            let meta = clip(&meta, room / 2, true);
+            let title = clip(&ch.title, room.saturating_sub(2 + meta.width() + 4), true);
+            let used = 2 + title.width() + meta.width();
+            vec![Line::from(vec![arrow, Span::styled(title, aux), Span::styled(meta, faint), rule(used)])]
         }
         Item::Stop(i) => {
             let st = v.stops[i];
@@ -244,8 +251,14 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
 }
 
 /// 宽版每一轮后面画一行虚线；章名后面不画，紧跟着它的轮次
+/// 一章的最后一轮后面也不画：紧接着就是下一章的实线，虚线只用来分同一章里的轮次
 fn dashed(v: &View, item: Item) -> bool {
-    !v.narrow && !matches!(item, Item::Chapter(_))
+    !v.narrow
+        && match item {
+            Item::Chapter(_) => false,
+            Item::Stop(i) => !v.chapters.iter().any(|c| c.start == i + 1),
+            Item::Fold => true,
+        }
 }
 
 /// 每项占几行（宽版加一行虚线）。
@@ -497,4 +510,85 @@ pub fn draw_menu(f: &mut Frame, m: &Menu, hover: Option<(u16, u16)>) -> Vec<(u16
         .filter(|(i, (k, _, _))| !k.is_empty() && y + 1 + (*i as u16) < y + h - 1)
         .map(|(i, (k, _, _))| (y + 1 + i as u16, x + 1, x + w - 1, k.clone()))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+
+    fn stop(id: &str, prompt: &str, reply: &str) -> Stop {
+        Stop {
+            kind: "human",
+            prompt: prompt.into(),
+            ts: None,
+            id: id.into(),
+            reply: reply.into(),
+            has_text: true,
+            compacted: false,
+        }
+    }
+
+    fn screen(narrow: bool, width: u16) -> Vec<String> {
+        let s = [
+            stop("a", "做 A", "好的，A 做完了"),
+            stop("b", "再改一下 A", "改好了"),
+            stop("c", "新需求 C", "C 做完了"),
+        ];
+        let st: Vec<&Stop> = s.iter().collect();
+        let ch = [
+            Chapter { start: 0, end: 2, title: "甲任务".into() },
+            Chapter { start: 2, end: 3, title: "丙任务".into() },
+        ];
+        let missing = std::collections::HashSet::new();
+        let v = View {
+            stops: &st,
+            narrow,
+            expanded: false,
+            opened: None,
+            busy: false,
+            missing: &missing,
+            chapters: &ch,
+            open: &[true, true],
+        };
+        let mut term = ratatui::Terminal::new(TestBackend::new(width, 16)).unwrap();
+        term.draw(|f| {
+            draw(f, &[], &[], &v, 0);
+        })
+        .unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..buf.area.height)
+            .map(|y| {
+                let mut line = String::new();
+                let mut skip = 0;
+                for x in 0..buf.area.width {
+                    if skip > 0 {
+                        skip -= 1;
+                        continue;
+                    }
+                    let sym = buf[(x, y)].symbol();
+                    skip = sym.width().saturating_sub(1);
+                    line += sym;
+                }
+                line.trim_end().to_owned()
+            })
+            .collect()
+    }
+
+    /// 宽版：章名是一条补满的实线；同一章里的轮次之间是虚线，章的最后一轮后面不画虚线
+    #[test]
+    fn chapter_is_a_rule() {
+        let w = screen(false, 40);
+        for l in &w {
+            println!("|{l}");
+        }
+        assert!(w[1].starts_with("  ▾ 甲任务  ") && w[1].ends_with("──") && !w[1].contains('·'));
+        assert!(w[4].trim_start().starts_with("┈"));
+        assert!(w[7].contains("▾ 丙任务")); // 第 2 轮的回复后面直接是下一章的实线
+        let n = screen(true, 17);
+        for l in &n {
+            println!("|{l}");
+        }
+        assert_eq!(n[1], "  ▾ 甲任务 ──────");
+    }
 }
