@@ -107,6 +107,7 @@ struct Trail {
     last_screen: u64,            // 上次读到的 Claude 屏幕（哈希）：没变就不用再认
     jumping_until: Option<Instant>, // 点了一轮、正在替 Claude 翻屏：这期间不跟，免得和翻屏打架
     reveal: bool,                // 选中的那一轮刚被跟着换了：画的时候把它滚进列表的可见范围
+    reveal_top: bool,            // 刚从章那一层按 → 进到一章：画的时候把这一章的章名顶到列表最上面
     marks: Marks,                // 这个会话哪几轮开新章（chapters.rs）
     chaps: Vec<Chapter>,         // 上一帧切出来的章（点击时按它认）
     chap_open: Vec<bool>,        // 上一帧每一章展没展开
@@ -372,23 +373,67 @@ impl Trail {
         true
     }
 
-    /// 选中往上 / 往下挪几轮（滚轮一格一轮，↑↓ 也是），列表跟着滚到它；章名不停（用户 2026-10-29：「不要鼠标滚动翻页的效果，
+    /// 选中往上 / 往下挪几格（滚轮一格一格，↑↓ 也是），列表跟着滚到它（用户 2026-10-29：「不要鼠标滚动翻页的效果，
     /// 而是鼠标滚动时选中项上下移动」「键盘也不能操作滚动」「enter 来确认跳转」）。只挪选中，不跳：按 Enter 才让 Claude 跳过去。
+    /// 一格是展开的章里的一轮，或者一整个收着的章（选中记成它的第一轮，章名那一行亮）；展开的章名不停
     fn move_sel(&mut self, d: isize) {
         let Some(tr) = &self.tr else { return };
         let stops = tr.visible();
         let Some(last) = stops.len().checked_sub(1) else { return };
+        let mut cells: Vec<std::ops::Range<usize>> = Vec::new();
+        let mut i = 0;
+        while i <= last {
+            let shut = self.chaps.iter().zip(&self.chap_open).find(|(c, open)| !**open && c.start == i);
+            let end = shut.map_or(i + 1, |(c, _)| c.end.min(last + 1).max(i + 1));
+            cells.push(i..end);
+            i = end;
+        }
         let cur = stops.iter().position(|st| Some(st.id.as_str()) == self.opened.as_deref()).unwrap_or(last);
-        let to = cur.saturating_add_signed(d).min(last);
-        self.opened = Some(stops[to].id.clone());
+        let at = cells.iter().position(|r| r.contains(&cur)).unwrap_or(cells.len() - 1);
+        let to = at.saturating_add_signed(d).min(cells.len() - 1);
+        self.opened = Some(stops[cells[to].start].id.clone());
         self.reveal = true;
-        if to < last {
+        if to < cells.len() - 1 {
             self.follow = false;
         }
     }
 
-    /// 键盘：↑↓ / j k 挪一轮，PageUp / PageDown 挪一屏，Home / End 到第一轮 / 最新一轮，Enter 让 Claude 跳到选中的那一轮，
-    /// Esc 关菜单（没有菜单就把焦点还给 Claude）。返回 false = 不认识的键，不用重画。
+    /// 选中的那一轮所在的章是收着的：返回那一章
+    fn shut_chapter(&self) -> Option<usize> {
+        let stops = self.tr.as_ref()?.visible();
+        let i = stops.iter().position(|st| Some(st.id.as_str()) == self.opened.as_deref())?;
+        let ci = self.chaps.iter().position(|c| (c.start..c.end).contains(&i))?;
+        (self.chap_open.get(ci) == Some(&false)).then_some(ci)
+    }
+
+    /// 在章和轮两层之间来回（用户 2026-10-29：「像我们之前做 Packer 一样，可以在层级之间来回跳转选择」）。
+    /// ← 收起所有章，只剩章名，选中跳到当前这一轮所在的章；→ / Enter 把章全部展开回去，选中这一章的第一轮，章名顶到最上面。
+    fn outline(&mut self, up: bool) -> bool {
+        let Some(tr) = &self.tr else { return false };
+        if self.chaps.is_empty() {
+            return false;
+        }
+        let stops = tr.visible();
+        if up {
+            for c in &self.chaps {
+                if let Some(st) = stops.get(c.start) {
+                    self.chap_fold.insert(st.id.clone(), false);
+                }
+            }
+            self.reveal = true;
+        } else {
+            let Some(ci) = self.shut_chapter() else { return false };
+            self.opened = stops.get(self.chaps[ci].start).map(|st| st.id.clone());
+            self.chap_fold.clear();
+            self.reveal_top = true;
+        }
+        self.follow = false;
+        true
+    }
+
+    /// 键盘：↑↓ / j k 挪一格，PageUp / PageDown 挪一屏，Home / End 到第一格 / 最后一格，← / h 退到章那一层，→ / l 进到选中的章，
+    /// Enter 选中的是收着的章就进去、是一轮就让 Claude 跳过去，Esc 关菜单（没有菜单就把焦点还给 Claude）。
+    /// 返回 false = 不认识的键（或者这会儿按了没用），不用重画。
     fn key(&mut self, code: KeyCode, tx: &Sender<Msg>) -> bool {
         let page = self.view.2.saturating_sub(1).max(1) as isize;
         match code {
@@ -398,6 +443,9 @@ impl Trail {
             KeyCode::PageDown => self.move_sel(page),
             KeyCode::Home | KeyCode::Char('g') => self.move_sel(isize::MIN / 2),
             KeyCode::End | KeyCode::Char('G') => self.move_sel(isize::MAX / 2),
+            KeyCode::Left | KeyCode::Char('h') => return self.outline(true),
+            KeyCode::Right | KeyCode::Char('l') => return self.outline(false),
+            KeyCode::Enter if self.shut_chapter().is_some() => return self.outline(false),
             KeyCode::Enter => {
                 let Some(tr) = &self.tr else { return false };
                 let stops = tr.visible();
@@ -1165,6 +1213,7 @@ pub fn run(cfg: Config) {
         last_screen: 0,
         jumping_until: None,
         reveal: false,
+        reveal_top: false,
         marks: Marks::default(),
         chaps: Vec::new(),
         chap_open: Vec::new(),
@@ -1326,7 +1375,12 @@ fn run_loop(
                 s.offset = s.offset.min(bottom);
                 // 选中换了（跟着 Claude 的屏幕、滚轮、键盘）：不在露出来的范围里就滚到刚好整个露出来，一轮一轮挪时列表也一轮一轮走。
                 // 往上出了范围时连它头上的章名一起露出来
-                if s.reveal
+                if s.reveal_top
+                    && let Some(k) = items.iter().position(|&it| view.selected(it))
+                {
+                    s.offset = if k > 0 && matches!(items[k - 1], Item::Chapter(_)) { k - 1 } else { k }.min(bottom);
+                    s.follow = s.offset >= bottom;
+                } else if s.reveal
                     && let Some(k) = items.iter().position(|&it| view.selected(it))
                 {
                     if k < s.offset {
@@ -1350,6 +1404,7 @@ fn run_loop(
                 foot_len = want;
             }
             s.reveal = false;
+            s.reveal_top = false;
             s.view = counts;
             s.chaps = chaps.clone();
             s.chap_open = chap_open.clone();

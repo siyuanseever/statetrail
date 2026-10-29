@@ -409,6 +409,11 @@ pub fn draw(f: &mut Frame, header: &[SLine], footer: &[SLine], v: &View, offset:
             Span::raw("  ")
         };
         for l in render_item(v, it, room) {
+            // 宽版章名前那行空白只是分隔：选中这一章时它不画 ▌、不铺底色
+            if l.width() == 0 {
+                lines.push(l);
+                continue;
+            }
             let mut spans = vec![lead.clone()];
             spans.extend(l.spans);
             let used: usize = spans.iter().map(|s| s.content.width()).sum();
