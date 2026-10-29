@@ -21,6 +21,8 @@ use crate::chapters::{self, Chapter, Marks};
 use crate::jump::{self, Outcome, Term};
 use crate::render;
 use crate::switch;
+use crate::ui::matches as hit;
+use unicode_width::UnicodeWidthStr;
 use crate::tools::{self, Plugin, sh_quote};
 use crate::transcript::Transcript;
 use crate::ui::{self, Item};
@@ -111,6 +113,7 @@ struct Trail {
     marks: Marks,                // 这个会话哪几轮开新章（chapters.rs）
     chaps: Vec<Chapter>,         // 上一帧切出来的章（点击时按它认）
     chap_open: Vec<bool>,        // 上一帧每一章展没展开
+    search: Option<String>,      // 按 / 打开的搜索：在搜的字（None = 没在搜）
     outline: bool,               // 在章那一层：所有章收着，选中按章挪（← 进来，→ / Enter 出去）
     classifying: bool,           // 正在后台调 Haiku 分章
     next_classify: Instant,
@@ -338,7 +341,7 @@ impl Trail {
     /// 它的开头已经在屏幕下半截时算上一轮（你看的多半是上一轮的结尾）；一轮的开头都没露出来（长回复的中段）就不动。
     /// 选中换了返回 true。
     fn follow_screen(&mut self) -> bool {
-        if self.self_focused || self.jumping_until.is_some_and(|t| Instant::now() < t) {
+        if self.self_focused || self.search.is_some() || self.jumping_until.is_some_and(|t| Instant::now() < t) {
             return false;
         }
         let Some(tr) = &self.tr else { return false };
@@ -380,12 +383,18 @@ impl Trail {
         let stops = tr.visible();
         let Some(last) = stops.len().checked_sub(1) else { return };
         // 章那一层一章一格（选中记成它的第一轮）；轮那一层一轮一格，挪进别的章那一章就展开、原来那章收起
-        let cells: Vec<std::ops::Range<usize>> = if self.outline && !self.chaps.is_empty() {
+        let q = self.query();
+        let cells: Vec<std::ops::Range<usize>> = if !q.is_empty() {
+            (0..=last).filter(|&i| hit(stops[i], &q)).map(|i| i..i + 1).collect()
+        } else if self.outline && !self.chaps.is_empty() {
             self.chaps.iter().map(|c| c.start..c.end.min(last + 1)).collect()
         } else {
             (0..=last).map(|i| i..i + 1).collect()
         };
         let cur = stops.iter().position(|st| Some(st.id.as_str()) == self.opened.as_deref()).unwrap_or(last);
+        if cells.is_empty() {
+            return;
+        }
         let at = cells.iter().position(|r| r.contains(&cur)).unwrap_or(cells.len() - 1);
         let to = at.saturating_add_signed(d).min(cells.len() - 1);
         self.opened = Some(stops[cells[to].start].id.clone());
@@ -393,6 +402,62 @@ impl Trail {
         if to < cells.len() - 1 {
             self.follow = false;
         }
+    }
+
+    /// 在搜的字（小写，去掉两头空白）；没在搜是空串
+    fn query(&self) -> String {
+        self.search.as_deref().map(|q| q.trim().to_lowercase()).unwrap_or_default()
+    }
+
+    /// 搜索框里的字变了：选中最新的那一处命中
+    fn pick_hit(&mut self) {
+        let q = self.query();
+        let Some(tr) = &self.tr else { return };
+        if let Some(st) = tr.visible().into_iter().rev().find(|st| hit(st, &q)) {
+            self.opened = Some(st.id.clone());
+        }
+        self.reveal = true;
+        self.follow = false;
+    }
+
+    /// 搜索框开着时的键：打字搜，↑↓ / 滚轮在命中的轮次里挪，Enter 让 Claude 跳过去并关掉搜索，Esc 关掉搜索（选中留在原处）
+    fn search_key(&mut self, code: KeyCode, tx: &Sender<Msg>) -> bool {
+        let page = self.view.2.saturating_sub(1).max(1) as isize;
+        match code {
+            KeyCode::Esc => {
+                self.search = None;
+                self.reveal = true;
+            }
+            KeyCode::Enter => {
+                let q = self.query();
+                let Some(tr) = &self.tr else { return false };
+                let stops = tr.visible();
+                let i = stops.iter().position(|st| Some(st.id.as_str()) == self.opened.as_deref());
+                if let Some(i) = i.filter(|&i| hit(stops[i], &q)) {
+                    self.search = None;
+                    self.reveal = true;
+                    self.jump(i, tx);
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(q) = &mut self.search {
+                    q.pop();
+                }
+                self.pick_hit();
+            }
+            KeyCode::Up => self.move_sel(-1),
+            KeyCode::Down => self.move_sel(1),
+            KeyCode::PageUp => self.move_sel(-page),
+            KeyCode::PageDown => self.move_sel(page),
+            KeyCode::Char(c) => {
+                if let Some(q) = &mut self.search {
+                    q.push(c);
+                }
+                self.pick_hit();
+            }
+            _ => return false,
+        }
+        true
     }
 
     /// 选中的那一轮所在的章是收着的：返回那一章
@@ -423,6 +488,9 @@ impl Trail {
     /// Enter 选中的是收着的章就进去、是一轮就让 Claude 跳过去，Esc 关菜单（没有菜单就把焦点还给 Claude）。
     /// 返回 false = 不认识的键（或者这会儿按了没用），不用重画。
     fn key(&mut self, code: KeyCode, tx: &Sender<Msg>) -> bool {
+        if self.search.is_some() && self.menu.is_none() {
+            return self.search_key(code, tx);
+        }
         let page = self.view.2.saturating_sub(1).max(1) as isize;
         match code {
             KeyCode::Up | KeyCode::Char('k') => self.move_sel(-1),
@@ -431,6 +499,10 @@ impl Trail {
             KeyCode::PageDown => self.move_sel(page),
             KeyCode::Home | KeyCode::Char('g') => self.move_sel(isize::MIN / 2),
             KeyCode::End | KeyCode::Char('G') => self.move_sel(isize::MAX / 2),
+            KeyCode::Char('/') => {
+                self.search = Some(String::new());
+                self.outline = false;
+            }
             KeyCode::Left | KeyCode::Char('h') => return self.outline(true),
             KeyCode::Right | KeyCode::Char('l') => return self.outline(false),
             KeyCode::Enter if self.shut_chapter().is_some() => return self.outline(false),
@@ -1206,6 +1278,7 @@ pub fn run(cfg: Config) {
         chaps: Vec::new(),
         chap_open: Vec::new(),
         outline: false,
+        search: None,
         classifying: false,
         next_classify: Instant::now(),
         no_claude_since: None,
@@ -1318,13 +1391,14 @@ fn run_loop(
             let chaps = if s.cfg.chapters == "off" { Vec::new() } else { s.marks.chapters(&stops) };
             // 同时只展开一章：选中的那一轮所在的章，别的章都收着（用户 2026-10-29：「同时只会有一个章节被展开，其他章节全部都是折叠的」；
             // 之前说的「默认不要折叠」是在还不能按章挪的时候）。在章那一层（←）全部收着。没选中时算最新一轮
+            let query = s.query();
             let sel = stops
                 .iter()
                 .position(|st| Some(st.id.as_str()) == s.opened.as_deref())
                 .unwrap_or(stops.len().saturating_sub(1));
             let chap_open: Vec<bool> = chaps
                 .iter()
-                .map(|c| !s.outline && (c.start..c.end).contains(&sel))
+                .map(|c| !s.outline && (c.start..c.end).contains(&sel) || !query.is_empty())
                 .collect();
             let view = ui::View {
                 stops: &stops,
@@ -1335,6 +1409,7 @@ fn run_loop(
                 missing: &s.missing,
                 chapters: &chaps,
                 open: &chap_open,
+                query: &query,
             };
             let items = view.items();
             let room = size.width.saturating_sub(2) as usize;
@@ -1354,7 +1429,7 @@ fn run_loop(
                 header::narrow(size.width as usize, &info).len()
             } else {
                 header::wide(size.width as usize, &info).0.len()
-            };
+            } + usize::from(s.search.is_some());
             // 列表露出来的范围决定 ▲ / ▼；窄版的 ▼ 要多一行底部，列表就少一行，所以最多算两遍
             let foot_base = if narrow { s.footer_rows(true, room, 0).0.len() } else { 1 };
             let mut foot_len = foot_base;
@@ -1411,7 +1486,7 @@ fn run_loop(
             let up_tag = tag("▲", counts.0);
             info.up_tag = &up_tag;
             info.slot = slot;
-            let head = if narrow {
+            let mut head = if narrow {
                 header::narrow(size.width as usize, &info)
             } else {
                 let (lines, head_ln) = header::wide(size.width as usize, &info);
@@ -1421,6 +1496,39 @@ fn run_loop(
             let accts = [claude::current_account(&s.cfg_dir), claude::short_account(&s.cfg_dir)];
             s.hot = header::hot_spots(&head, &accts);
             s.up_at = (slot > 0 && counts.0 > 0).then_some((head.len(), slot));
+            // 搜索框：表头最后一行，「/ 字▏  3 处」；窄版只写数字
+            if let Some(q) = &s.search {
+                let th = crate::theme::colors();
+                let n = if query.is_empty() { 0 } else { (0..stops.len()).filter(|&i| view.hit(i)).count() };
+                let tail = if query.is_empty() {
+                    String::new()
+                } else if n == 0 {
+                    t("没有")
+                } else if narrow {
+                    n.to_string()
+                } else {
+                    t("{n} 处").replace("{n}", &n.to_string())
+                };
+                let room_q = room.saturating_sub(2 + 1 + UnicodeWidthStr::width(tail.as_str()) + 1);
+                let shown: String = {
+                    // 字太长时只露最后打的那段
+                    let mut w = 0;
+                    let mut v: Vec<char> = q.chars().rev().take_while(|c| {
+                        w += unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
+                        w <= room_q
+                    }).collect();
+                    v.reverse();
+                    v.into_iter().collect()
+                };
+                let pad = room.saturating_sub(2 + UnicodeWidthStr::width(shown.as_str()) + 1 + UnicodeWidthStr::width(tail.as_str()));
+                head.push(vec![
+                    ("/ ".to_owned(), Some(th.accent)),
+                    (shown, None),
+                    ("▏".to_owned(), Some(th.accent)),
+                    (" ".repeat(pad), None),
+                    (tail, Some(th.grey)),
+                ]);
+            }
             // 底部：宽版一行按钮，▼ 在行首；窄版三个按钮就占满了，▼ 在第二行（插件那一行）
             let down_tag = tag("▼", counts.1);
             let (rows, at) = s.footer_rows(narrow, room, slot);

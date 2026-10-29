@@ -32,11 +32,26 @@ pub struct View<'a> {
     pub missing: &'a std::collections::HashSet<String>,
     pub chapters: &'a [Chapter], // 空 = 不分章，平铺
     pub open: &'a [bool],        // 每一章展没展开
+    pub query: &'a str,          // 在搜的字（小写）；空 = 没在搜
 }
 
 impl View<'_> {
     pub fn items(&self) -> Vec<Item> {
         let mut out = Vec::new();
+        // 在搜：只列命中的轮次；分章时命中的轮次照旧排在各自的章名下面，没命中的章不列
+        if !self.query.is_empty() {
+            if self.chapters.is_empty() {
+                out.extend((0..self.stops.len()).filter(|&i| self.hit(i)).map(Item::Stop));
+            }
+            for (ci, ch) in self.chapters.iter().enumerate() {
+                let hits: Vec<Item> = (ch.start..ch.end).filter(|&i| self.hit(i)).map(Item::Stop).collect();
+                if !hits.is_empty() {
+                    out.push(Item::Chapter(ci));
+                    out.extend(hits);
+                }
+            }
+            return out;
+        }
         if self.chapters.is_empty() {
             if self.stops.iter().any(|s| s.compacted) {
                 out.push(Item::Fold);
@@ -67,6 +82,11 @@ impl View<'_> {
             Item::Chapter(ci) => self.open.get(ci) != Some(&true) && self.opened_chapter() == Some(ci),
             Item::Fold => false,
         }
+    }
+
+    /// 第 i 轮命中在搜的字：你说的话或者 Claude 回复的那一行里有（不分大小写）
+    pub fn hit(&self, i: usize) -> bool {
+        matches(self.stops[i], self.query)
     }
 
     pub fn gone(&self) -> usize {
@@ -195,6 +215,7 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
             } else {
                 t("（{p}）").replace("{p}", &st.prompt)
             };
+            let ask = near(&ask, v.query);
             let last_busy = v.busy && n == v.stops.len();
             let missing = v.missing.contains(&st.id);
             let dim = missing || st.compacted && !v.chapters.is_empty(); // 主界面里已经跳不过去
@@ -208,10 +229,9 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
                 };
                 // 分章时轮次也不缩进：细条本来就窄（用户 2026-10-29：「你不要右移，你就直接放到最左侧」）
                 let head = format!("{n} ");
-                return vec![Line::from(vec![
-                    Span::styled(head.clone(), dimc),
-                    Span::styled(clip(&ask, room.saturating_sub(head.width()), false), style),
-                ])];
+                let mut spans = vec![Span::styled(head.clone(), dimc)];
+                spans.extend(mark_hit(clip(&ask, room.saturating_sub(head.width()), false), v.query, style));
+                return vec![Line::from(spans)];
             }
             let mut gone = String::new();
             if st.compacted {
@@ -241,15 +261,47 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
             } else {
                 let rest = room.saturating_sub(meta.width() + 1);
                 let ask_style = if dim { faint } else { Style::default() };
-                lines.push(Line::from(vec![
-                    Span::styled(meta, faint),
-                    Span::raw(" "),
-                    Span::styled(clip(&ask, rest, true), ask_style),
-                ]));
+                let mut spans = vec![Span::styled(meta, faint), Span::raw(" ")];
+                spans.extend(mark_hit(clip(&ask, rest, true), v.query, ask_style));
+                lines.push(Line::from(spans));
             }
             lines.push(Line::from(Span::styled(clip(&format!("   {reply}"), room, true), faint)));
             lines
         }
+    }
+}
+
+/// 这一轮命中在搜的字 q（已经是小写）
+pub fn matches(st: &Stop, q: &str) -> bool {
+    st.prompt.to_lowercase().contains(q) || st.reply.to_lowercase().contains(q)
+}
+
+/// 在搜时，命中的字在这一行后面露不出来：从命中处前几个字开始显示，前面写「…」
+fn near(text: &str, query: &str) -> String {
+    if query.is_empty() {
+        return text.to_owned();
+    }
+    let lower = text.to_lowercase();
+    let Some(at) = lower.find(query) else { return text.to_owned() };
+    let p = lower[..at].chars().count();
+    if p <= 6 {
+        return text.to_owned();
+    }
+    format!("…{}", text.chars().skip(p - 2).collect::<String>())
+}
+
+/// 把一行里命中在搜的字涂成强调色（只涂第一处）
+fn mark_hit(text: String, query: &str, style: Style) -> Vec<Span<'static>> {
+    let lower = text.to_lowercase();
+    // 小写后长度变了（少见的字母）就不涂，免得切错
+    let at = if query.is_empty() || lower.len() != text.len() { None } else { lower.find(query) };
+    match at.filter(|&a| text.is_char_boundary(a) && text.is_char_boundary(a + query.len())) {
+        Some(a) => vec![
+            Span::styled(text[..a].to_owned(), style),
+            Span::styled(text[a..a + query.len()].to_owned(), Style::default().fg(colors().accent).add_modifier(Modifier::BOLD)),
+            Span::styled(text[a + query.len()..].to_owned(), style),
+        ],
+        None => vec![Span::styled(text, style)],
     }
 }
 
@@ -575,6 +627,7 @@ mod tests {
             missing: &missing,
             chapters: &ch,
             open,
+            query: "",
         };
         let mut term = ratatui::Terminal::new(TestBackend::new(width, 16)).unwrap();
         term.draw(|f| {
@@ -618,6 +671,37 @@ mod tests {
         }
         assert_eq!(n[1], "  ▾ 甲任务");
         assert!(n[2].starts_with("│ 1") && n[3].starts_with("│ 2") && n[4] == "  ▾ 丙任务" && n[5].starts_with("│ 3"));
+    }
+
+    /// 在搜：只列命中的轮次和它们所在的章；命中在一行后面时从命中处前面一点开始显示
+    #[test]
+    fn search_lists_hits_only() {
+        let mk = |p: &str| Stop {
+            kind: "human",
+            prompt: p.into(),
+            ts: None,
+            id: p.into(),
+            reply: "好".into(),
+            has_text: true,
+            compacted: false,
+        };
+        let owned = [mk("改颜色"), mk("这一句话很长很长很长很长，后面才说到 Search 功能"), mk("发布")];
+        let st: Vec<&Stop> = owned.iter().collect();
+        let ch = [Chapter { start: 0, end: 2, title: "甲".into() }, Chapter { start: 2, end: 3, title: "乙".into() }];
+        let missing = std::collections::HashSet::new();
+        let v = View {
+            stops: &st,
+            narrow: true,
+            expanded: false,
+            opened: None,
+            busy: false,
+            missing: &missing,
+            chapters: &ch,
+            open: &[true, true],
+            query: "search",
+        };
+        assert!(matches!(v.items()[..], [Item::Chapter(0), Item::Stop(1)]));
+        assert!(near(&st[1].prompt, "search").starts_with("…到 Search"));
     }
 
     /// 收着的章：最右边写收了几轮，不写第几轮到第几轮

@@ -18,6 +18,8 @@ statetrail is for the session you are in: it stays beside the live Claude and fo
 - **The trail.** One row per turn. Click a row and Claude jumps there, usually in well under a second.
   The mouse wheel, `↑` `↓` (or `k` `j`), PageUp / PageDown and Home / End move the selection one turn at a time
   (the list follows); `Enter` makes Claude jump to the selected turn, `Esc` closes a menu or hands focus back to Claude.
+  `/` searches this session: type, and only the turns whose message or reply line contains it stay (under their
+  chapters, the match lit); `↑` `↓` move between them, `Enter` jumps and closes the search, `Esc` closes it.
   Turns before a `/compact` fold into one row. The list refreshes as soon as Claude starts or stops working.
   When Claude exits, the trail closes within a few seconds (with its pane, at once); start Claude again and it reopens.
   When the list is longer than the pane, `▲ 12` at the start of the line above it and `▼ 5` at the start of the
