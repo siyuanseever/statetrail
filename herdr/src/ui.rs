@@ -266,6 +266,11 @@ fn height_of(v: &View, item: Item, room: usize) -> usize {
     render_item(v, item, room).len() + usize::from(dashed(v, item))
 }
 
+/// 从 offset 画起，第 k 项能不能整个露出来
+pub fn fits(v: &View, items: &[Item], offset: usize, k: usize, rows: usize, room: usize) -> bool {
+    k >= offset && items[offset..=k].iter().map(|&it| height_of(v, it, room)).sum::<usize>() <= rows
+}
+
 /// 停在最底时，第一项该是第几项：让最后一项整个露出来。
 pub fn bottom_offset(v: &View, items: &[Item], room: usize, rows: usize) -> usize {
     let mut used = 0;

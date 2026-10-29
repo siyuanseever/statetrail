@@ -1,7 +1,7 @@
 //! 轨迹窗格本身（`statetrail pane`）。主线程只在一个通道上等：键盘鼠标、herdr 事件、别的进程发来的命令（toggle）、
 //! 跳转线程的结果各有一个线程往里送，空闲时不轮询、不醒。对应 Python 版的 Sidebar.run。
 
-use crossterm::event::{self, Event, MouseButton, MouseEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
 use crossterm::{execute, terminal};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -33,7 +33,6 @@ const FOLLOW_EVERY: Duration = Duration::from_millis(500);
 const CLASSIFY_RETRY: Duration = Duration::from_secs(600); // 调 Haiku 分章失败了（没网、没额度）：隔这么久再试
 const AGENT_CHECK: Duration = Duration::from_secs(5); // Claude 退出了却没等到事件：这么久补查一次
 const GONE_GRACE: Duration = Duration::from_secs(2); // Claude 退出后过这么久就关掉轨迹，不留残骸
-const WHEEL: usize = 3; // 滚轮一格翻几项
 const TAB_NAME_MAX: usize = 24; // tab 名最多多少列（中文算两格）
 
 enum Msg {
@@ -103,14 +102,13 @@ struct Trail {
     flash: Option<(String, Instant)>,
     offset: usize,
     follow: bool, // 停在最底：列表变长时跟着走
-    pair_focused: bool,          // herdr 的焦点在这个 Claude 或这个轨迹上：只有这时才跟着 Claude 的屏幕走
+    pair_focused: bool,
+    self_focused: bool, // 焦点在轨迹自己身上：你在用滚轮 / 键盘挪选中，不跟 Claude 的屏幕（不然 Claude 一输出就把选中抢回去）          // herdr 的焦点在这个 Claude 或这个轨迹上：只有这时才跟着 Claude 的屏幕走
     last_screen: u64,            // 上次读到的 Claude 屏幕（哈希）：没变就不用再认
     jumping_until: Option<Instant>, // 点了一轮、正在替 Claude 翻屏：这期间不跟，免得和翻屏打架
     reveal: bool,                // 选中的那一轮刚被跟着换了：画的时候把它滚进列表的可见范围
     marks: Marks,                // 这个会话哪几轮开新章（chapters.rs）
     chaps: Vec<Chapter>,         // 上一帧切出来的章（点击时按它认）
-    items: Vec<Item>,            // 上一帧列表里的项（滚轮按它数轮次）
-    bottom: usize,               // 上一帧停在最底时的 offset
     chap_open: Vec<bool>,        // 上一帧每一章展没展开
     chap_fold: HashMap<String, bool>, // 你点过的章（按开头那一轮的 id）：展开 / 收起；没点过的展开
     classifying: bool,           // 正在后台调 Haiku 分章
@@ -339,7 +337,7 @@ impl Trail {
     /// 它的开头已经在屏幕下半截时算上一轮（你看的多半是上一轮的结尾）；一轮的开头都没露出来（长回复的中段）就不动。
     /// 选中换了返回 true。
     fn follow_screen(&mut self) -> bool {
-        if self.jumping_until.is_some_and(|t| Instant::now() < t) {
+        if self.self_focused || self.jumping_until.is_some_and(|t| Instant::now() < t) {
             return false;
         }
         let Some(tr) = &self.tr else { return false };
@@ -374,19 +372,50 @@ impl Trail {
         true
     }
 
-    /// 滚轮：按轮次数，翻 WHEEL 轮，章名不占步数（用户 2026-10-29：「滑动就要在对应的 conversation 级别」「章节只是一个辅助作用」）。
-    /// 停在一章的第一轮上时把章名也露出来。
-    fn wheel(&mut self, down: bool) {
-        let (mut k, mut n) = (self.offset.min(self.items.len().saturating_sub(1)), 0);
-        while n < WHEEL && if down { k + 1 < self.items.len() } else { k > 0 } {
-            k = if down { k + 1 } else { k - 1 };
-            n += usize::from(matches!(self.items[k], Item::Stop(_)));
+    /// 选中往上 / 往下挪几轮（滚轮一格一轮，↑↓ 也是），列表跟着滚到它；章名不停（用户 2026-10-29：「不要鼠标滚动翻页的效果，
+    /// 而是鼠标滚动时选中项上下移动」「键盘也不能操作滚动」「enter 来确认跳转」）。只挪选中，不跳：按 Enter 才让 Claude 跳过去。
+    fn move_sel(&mut self, d: isize) {
+        let Some(tr) = &self.tr else { return };
+        let stops = tr.visible();
+        let Some(last) = stops.len().checked_sub(1) else { return };
+        let cur = stops.iter().position(|st| Some(st.id.as_str()) == self.opened.as_deref()).unwrap_or(last);
+        let to = cur.saturating_add_signed(d).min(last);
+        self.opened = Some(stops[to].id.clone());
+        self.reveal = true;
+        if to < last {
+            self.follow = false;
         }
-        if k > 0 && matches!(self.items[k - 1], Item::Chapter(_)) && matches!(self.items[k], Item::Stop(_)) {
-            k -= 1;
+    }
+
+    /// 键盘：↑↓ / j k 挪一轮，PageUp / PageDown 挪一屏，Home / End 到第一轮 / 最新一轮，Enter 让 Claude 跳到选中的那一轮，
+    /// Esc 关菜单（没有菜单就把焦点还给 Claude）。返回 false = 不认识的键，不用重画。
+    fn key(&mut self, code: KeyCode, tx: &Sender<Msg>) -> bool {
+        let page = self.view.2.saturating_sub(1).max(1) as isize;
+        match code {
+            KeyCode::Up | KeyCode::Char('k') => self.move_sel(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.move_sel(1),
+            KeyCode::PageUp => self.move_sel(-page),
+            KeyCode::PageDown => self.move_sel(page),
+            KeyCode::Home | KeyCode::Char('g') => self.move_sel(isize::MIN / 2),
+            KeyCode::End | KeyCode::Char('G') => self.move_sel(isize::MAX / 2),
+            KeyCode::Enter => {
+                let Some(tr) = &self.tr else { return false };
+                let stops = tr.visible();
+                if let Some(i) = stops.iter().position(|st| Some(st.id.as_str()) == self.opened.as_deref()) {
+                    self.jump(i, tx);
+                }
+            }
+            KeyCode::Esc if self.menu.is_some() => {
+                self.menu = None;
+                self.menu_hits.clear();
+            }
+            KeyCode::Esc => {
+                let _ = herdr::call("pane.focus", json!({"pane_id": self.target}));
+                return false;
+            }
+            _ => return false,
         }
-        self.offset = k;
-        self.follow = down && k >= self.bottom; // 到底了就重新跟着走
+        true
     }
 
     fn page(&mut self, d: i32) {
@@ -1132,13 +1161,12 @@ pub fn run(cfg: Config) {
         offset: 0,
         follow: true,
         pair_focused: false,
+        self_focused: false,
         last_screen: 0,
         jumping_until: None,
         reveal: false,
         marks: Marks::default(),
         chaps: Vec::new(),
-        items: Vec::new(),
-        bottom: 0,
         chap_open: Vec::new(),
         chap_fold: HashMap::new(),
         classifying: false,
@@ -1292,17 +1320,21 @@ fn run_loop(
             loop {
                 let rows = (size.height as usize).saturating_sub(head_len + 1 + 1 + foot_len);
                 let bottom = ui::bottom_offset(&view, &items, room, rows);
-                s.bottom = bottom;
                 if s.follow {
                     s.offset = bottom;
                 }
                 s.offset = s.offset.min(bottom);
-                // 选中跟着 Claude 的屏幕换了：不在露出来的范围里就滚过去（停在它上面一项）
+                // 选中换了（跟着 Claude 的屏幕、滚轮、键盘）：不在露出来的范围里就滚到刚好整个露出来，一轮一轮挪时列表也一轮一轮走。
+                // 往上出了范围时连它头上的章名一起露出来
                 if s.reveal
                     && let Some(k) = items.iter().position(|&it| view.selected(it))
-                    && !ui::visible(&view, &items, s.offset, rows, room).contains(&items[k])
                 {
-                    s.offset = k.saturating_sub(1).min(bottom);
+                    if k < s.offset {
+                        s.offset = if k > 0 && matches!(items[k - 1], Item::Chapter(_)) { k - 1 } else { k };
+                    }
+                    while s.offset < bottom && s.offset < k && !ui::fits(&view, &items, s.offset, k, rows, room) {
+                        s.offset += 1;
+                    }
                     s.follow = s.offset >= bottom;
                 }
                 counts = ui::view_counts(&view, &ui::visible(&view, &items, s.offset, rows, room));
@@ -1320,7 +1352,6 @@ fn run_loop(
             s.reveal = false;
             s.view = counts;
             s.chaps = chaps.clone();
-            s.items = items.clone();
             s.chap_open = chap_open.clone();
             let tag = |arrow: &str, n: usize| {
                 if n > 0 {
@@ -1429,8 +1460,8 @@ fn run_loop(
                         continue;
                     }
                 }
-                MouseEventKind::ScrollUp => s.wheel(false),
-                MouseEventKind::ScrollDown => s.wheel(true), // 画的时候按最底夹住
+                MouseEventKind::ScrollUp => s.move_sel(-1),
+                MouseEventKind::ScrollDown => s.move_sel(1),
                 MouseEventKind::Down(_) if s.menu.is_some() => {
                     // 下拉菜单开着：点中一项就去换，点哪儿都先把菜单收起来
                     let hit = s
@@ -1498,8 +1529,14 @@ fn run_loop(
                 _ => {}
             },
             Ok(Msg::Input(Event::Resize(..))) => {}
+            Ok(Msg::Input(Event::Key(k))) if k.kind == KeyEventKind::Press => {
+                if !s.key(k.code, tx) {
+                    redraw = false;
+                    continue;
+                }
+            }
             Ok(Msg::Input(_)) => {
-                redraw = false; // 键盘：轨迹不用
+                redraw = false;
                 continue;
             }
             Ok(Msg::Herdr(ev)) => {
@@ -1516,6 +1553,7 @@ fn run_loop(
                 }
                 if name == "pane_focused" {
                     s.pair_focused = pane == s.target || pane == s.me;
+                    s.self_focused = pane == s.me;
                     if s.tool.as_ref().is_some_and(|(p, _)| p != pane) && !s.tool_sticky {
                         s.tool_check = Some(now + Duration::from_millis(400));
                     }
