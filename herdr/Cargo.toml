@@ -1,6 +1,6 @@
 [package]
 name = "statetrail"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "statetrail for herdr, in Rust: the trail of a Claude Code session docked next to it"
 license = "MIT"
