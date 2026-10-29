@@ -25,6 +25,11 @@ statetrail is for the session you are in: it stays beside the live Claude and fo
 - **Follows where you are in Claude.** Scroll Claude's own screen up and the trail marks the turn you are reading
   (and pages to it); back at the bottom it marks the latest turn. Only the trail next to the Claude you are in does
   this, reading Claude's screen twice a second (about 0.1% of one core); every other trail stays asleep.
+- **Chapters.** Turns are grouped by task: each new request or problem starts a chapter with a short title, and its
+  turns sit indented under it. Only the chapter you are in is open; click a title to open or close one. Claude Haiku
+  decides where chapters start by reading what you typed (only for the Claude you are looking at, once per message,
+  about $0.002 for 80 messages). Right-click a turn for *New chapter* or a title for *Join above* when it guessed
+  wrong; your marks win. `chapters = "manual"` keeps only your marks, `"off"` keeps the flat list.
 - **Model, account, quota.** `ctx`, `5h` and `7d` bars, grey while things are fine and coloured only when they
   are not: a quota bar turns orange or red when you are using it faster than the window passes, not just when it is
   high. Each quota also says how long until its window resets (`2h41m`, `2d12h`). Two Claude accounts at once
@@ -111,6 +116,8 @@ icons = "auto"            # "auto": Nerd Font icons if one is installed, else pl
 live_usage = true         # also ask for live 5h / 7d quota with your Claude login (see below); false: never
 lang = ""                 # "en" / "zh"; empty follows your locale
 tab_names = true          # name an unnamed tab after the Claude session
+chapters = "auto"         # group turns into chapters: "auto" (Claude Haiku, right-click to fix), "manual"
+                          # (only where you right-click), "off" (flat list, nothing sent)
 tool_height = 0.5         # a bottom-button tool takes this share of the Claude pane's height (0.1–0.9),
                           # unless the button sets its own height
 
@@ -166,6 +173,11 @@ plugin_buttons = true
      Claude Code only refreshes it when it asks for usage (for example when you run `/usage`), so it can be days old.
 
   The header says how old the numbers are, and a window whose reset time has passed shows `?` rather than a stale number.
+- **Chapters send what you typed to Claude Haiku** (`chapters = "auto"`, the default): `claude -p --model haiku`
+  under the account of that Claude session, with no tools, no settings or hooks, and no session saved. It sends only
+  your messages (each cut to 300 characters, plus the last six already grouped), never Claude's replies or tool
+  output, and only for the Claude you are looking at. Results go to `chapters/<session>.json` in the state directory,
+  one line per call to `chapters/chapters.log`. `"manual"` or `"off"` sends nothing.
 - **Sends keys** to the Claude pane to scroll it (PageUp / PageDown / Ctrl+Home / Ctrl+End / mouse wheel). It types
   into the prompt only when you pick another account from the header: `/exit`, then the restart command.
 - **Checks for updates** by reading herdr's own `plugins.json` and the modification time of its own binary.

@@ -10,6 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::chapters::Chapter;
 use crate::i18n::t;
 use crate::render::SLine;
 use crate::theme::colors;
@@ -18,7 +19,8 @@ use crate::transcript::Stop;
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Item {
     Fold,
-    Stop(usize), // visible() 里的下标
+    Stop(usize),    // visible() 里的下标
+    Chapter(usize), // 章名那一行：View.chapters 里的下标
 }
 
 pub struct View<'a> {
@@ -28,20 +30,43 @@ pub struct View<'a> {
     pub opened: Option<&'a str>,
     pub busy: bool,
     pub missing: &'a std::collections::HashSet<String>,
+    pub chapters: &'a [Chapter], // 空 = 不分章，平铺
+    pub open: &'a [bool],        // 每一章展没展开
 }
 
 impl View<'_> {
     pub fn items(&self) -> Vec<Item> {
         let mut out = Vec::new();
-        if self.stops.iter().any(|s| s.compacted) {
-            out.push(Item::Fold);
+        if self.chapters.is_empty() {
+            if self.stops.iter().any(|s| s.compacted) {
+                out.push(Item::Fold);
+            }
+            out.extend((0..self.stops.len()).filter(|&i| !self.stops[i].compacted || self.expanded).map(Item::Stop));
+            return out;
         }
-        for (i, s) in self.stops.iter().enumerate() {
-            if !s.compacted || self.expanded {
-                out.push(Item::Stop(i));
+        // 分章时不再把压缩掉的轮次收成一行：章本来就收着，收成一行反而一个章名都看不到。压缩掉的轮次画暗
+        for (ci, ch) in self.chapters.iter().enumerate() {
+            out.push(Item::Chapter(ci));
+            if self.open.get(ci) == Some(&true) {
+                out.extend((ch.start..ch.end).map(Item::Stop));
             }
         }
         out
+    }
+
+    /// 选中的那一轮所在的章
+    pub fn opened_chapter(&self) -> Option<usize> {
+        let i = self.stops.iter().position(|s| Some(s.id.as_str()) == self.opened)?;
+        self.chapters.iter().position(|c| (c.start..c.end).contains(&i))
+    }
+
+    /// 这一项画成选中：选中的那一轮；它所在的章收着时，是那一章的章名
+    pub fn selected(&self, it: Item) -> bool {
+        match it {
+            Item::Stop(i) => self.opened == Some(self.stops[i].id.as_str()),
+            Item::Chapter(ci) => self.open.get(ci) != Some(&true) && self.opened_chapter() == Some(ci),
+            Item::Fold => false,
+        }
     }
 
     pub fn gone(&self) -> usize {
@@ -129,9 +154,32 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
                 faint,
             ))]
         }
+        Item::Chapter(ci) => {
+            let ch = &v.chapters[ci];
+            let open = v.open.get(ci) == Some(&true);
+            let arrow = Span::styled(if open { "▾ " } else { "▸ " }, Style::default().fg(c.accent));
+            let bold = Style::default().add_modifier(Modifier::BOLD);
+            let n = ch.end - ch.start;
+            if v.narrow {
+                // 收着时在后面写这一章有几轮
+                let tail = if open { String::new() } else { format!(" {n}") };
+                let title = clip(&ch.title, room.saturating_sub(2 + tail.width()), false);
+                return vec![Line::from(vec![arrow, Span::styled(title, bold), Span::styled(tail, dimc)])];
+            }
+            let range = if n > 1 {
+                t("第 {a}–{b} 轮").replace("{a}", &(ch.start + 1).to_string()).replace("{b}", &ch.end.to_string())
+            } else {
+                t("第 {a} 轮").replace("{a}", &(ch.start + 1).to_string())
+            };
+            let meta = format!("  {range} · {}", when(v.stops[ch.start].ts.as_deref()));
+            let title = clip(&ch.title, room.saturating_sub(2 + meta.width().min(room / 2)), true);
+            vec![Line::from(vec![arrow, Span::styled(title, bold), Span::styled(clip(&meta, room / 2, true), faint)])]
+        }
         Item::Stop(i) => {
             let st = v.stops[i];
             let n = i + 1;
+            // 分章时轮次往右缩进，看得出是章下面的
+            let ind = if v.chapters.is_empty() { "" } else if v.narrow { " " } else { "  " };
             let ask = if st.kind == "human" {
                 oneline(&st.prompt)
             } else {
@@ -139,15 +187,16 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
             };
             let last_busy = v.busy && n == v.stops.len();
             let missing = v.missing.contains(&st.id);
+            let dim = missing || st.compacted && !v.chapters.is_empty(); // 主界面里已经跳不过去
             if v.narrow {
                 let style = if last_busy {
                     Style::default().fg(c.busy)
-                } else if missing {
+                } else if dim {
                     dimc
                 } else {
                     Style::default()
                 };
-                let head = format!("{n} ");
+                let head = format!("{ind}{n} ");
                 return vec![Line::from(vec![
                     Span::styled(head.clone(), dimc),
                     Span::styled(clip(&ask, room.saturating_sub(head.width()), false), style),
@@ -160,7 +209,7 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
             if missing {
                 gone += &format!(" · {}", t("主界面已无"));
             }
-            let meta = format!(" {n} {}{gone}", when(st.ts.as_deref()));
+            let meta = format!("{ind} {n} {}{gone}", when(st.ts.as_deref()));
             let reply = if last_busy {
                 t("（Claude 还在干活…）")
             } else if st.reply.is_empty() {
@@ -175,27 +224,32 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
                     Span::styled(meta.clone(), faint),
                     Span::styled(format!(" {}", t("你说的：")), Style::default().add_modifier(Modifier::BOLD)),
                 ]));
-                for l in wrap(st.prompt.trim(), room.saturating_sub(4).max(10)) {
-                    lines.push(Line::from(format!("   {l}")));
+                for l in wrap(st.prompt.trim(), room.saturating_sub(4 + ind.len()).max(10)) {
+                    lines.push(Line::from(format!("{ind}   {l}")));
                 }
             } else {
                 let rest = room.saturating_sub(meta.width() + 1);
-                let ask_style = if missing { faint } else { Style::default() };
+                let ask_style = if dim { faint } else { Style::default() };
                 lines.push(Line::from(vec![
                     Span::styled(meta, faint),
                     Span::raw(" "),
                     Span::styled(clip(&ask, rest, true), ask_style),
                 ]));
             }
-            lines.push(Line::from(Span::styled(clip(&format!("   {reply}"), room, true), faint)));
+            lines.push(Line::from(Span::styled(clip(&format!("{ind}   {reply}"), room, true), faint)));
             lines
         }
     }
 }
 
+/// 宽版每一轮后面画一行虚线；章名后面不画，紧跟着它的轮次
+fn dashed(v: &View, item: Item) -> bool {
+    !v.narrow && !matches!(item, Item::Chapter(_))
+}
+
 /// 每项占几行（宽版加一行虚线）。
 fn height_of(v: &View, item: Item, room: usize) -> usize {
-    render_item(v, item, room).len() + usize::from(!v.narrow)
+    render_item(v, item, room).len() + usize::from(dashed(v, item))
 }
 
 /// 停在最底时，第一项该是第几项：让最后一项整个露出来。
@@ -239,16 +293,21 @@ pub fn visible(v: &View, items: &[Item], offset: usize, rows: usize, room: usize
 }
 
 /// 列表上面还有几轮、下面还有几轮、露出来几项：和 Python 版 read_view 的算法一样（它是读屏，这里是算）。
-/// 「已压缩」那一行露出来时，上面算 0 轮；那一行代表的是第 1 到第 N 轮。
+/// 每项代表一段轮次：「已压缩」那一行是第 1 到第 N 轮，收着的章是整章，展开的章名只占个位置（它的轮次各自算）。
 pub fn view_counts(v: &View, shown: &[Item]) -> (usize, usize, usize) {
-    let nums: Vec<usize> = shown
+    let spans: Vec<(usize, usize)> = shown
         .iter()
-        .filter_map(|it| if let Item::Stop(i) = it { Some(i + 1) } else { None })
+        .map(|&it| match it {
+            Item::Fold => (0, v.gone()),
+            Item::Stop(i) => (i, i + 1),
+            Item::Chapter(ci) => {
+                let ch = &v.chapters[ci];
+                if v.open.get(ci) == Some(&true) { (ch.start, ch.start) } else { (ch.start, ch.end) }
+            }
+        })
         .collect();
-    let fold = shown.first() == Some(&Item::Fold);
-    match (nums.first(), nums.last()) {
-        (Some(&a), Some(&b)) => (if fold { 0 } else { a - 1 }, v.stops.len() - b, nums.len() + usize::from(fold)),
-        _ if fold => (0, v.stops.len() - v.gone(), 1),
+    match (spans.iter().map(|s| s.0).min(), spans.iter().map(|s| s.1).max()) {
+        (Some(a), Some(b)) => (a, v.stops.len().saturating_sub(b), shown.len()),
         _ => (0, 0, 0),
     }
 }
@@ -316,7 +375,7 @@ pub fn draw(f: &mut Frame, header: &[SLine], footer: &[SLine], v: &View, offset:
         if start >= rows {
             break;
         }
-        let selected = matches!(it, Item::Stop(i) if v.opened == Some(v.stops[i].id.as_str()));
+        let selected = v.selected(it);
         let bg = if selected {
             c.selection.map_or_else(Style::default, |b| Style::default().bg(b))
         } else {
@@ -331,7 +390,7 @@ pub fn draw(f: &mut Frame, header: &[SLine], footer: &[SLine], v: &View, offset:
             }
             lines.push(Line::from(spans).patch_style(bg));
         }
-        if !v.narrow {
+        if dashed(v, it) {
             lines.push(Line::from(Span::styled(
                 format!("  {}", "┈".repeat(room)),
                 Style::default().fg(c.dim),

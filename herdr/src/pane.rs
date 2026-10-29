@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use crate::header;
 use crate::i18n::t;
+use crate::chapters::{self, Chapter, Marks};
 use crate::jump::{self, Outcome, Term};
 use crate::render;
 use crate::switch;
@@ -29,6 +30,7 @@ const TICK: Duration = Duration::from_secs(60); // 没有事件时多久醒一�
 // 焦点在这一对 Claude / 轨迹上时，多久读一次 Claude 的屏幕、看它停在哪一轮（用户 2026-10-28：「根据我在 Claude Code 里
 // 查看的历史消息或者最新底部，更新右侧轨迹的选中」）。别的轨迹不读：一次读屏约 4KB、走 socket 不到 1ms
 const FOLLOW_EVERY: Duration = Duration::from_millis(500);
+const CLASSIFY_RETRY: Duration = Duration::from_secs(600); // 调 Haiku 分章失败了（没网、没额度）：隔这么久再试
 const AGENT_CHECK: Duration = Duration::from_secs(5); // Claude 退出了却没等到事件：这么久补查一次
 const GONE_GRACE: Duration = Duration::from_secs(2); // Claude 退出后过这么久就关掉轨迹，不留残骸
 const WHEEL: usize = 3; // 滚轮一格翻几项
@@ -43,6 +45,7 @@ enum Msg {
     Jumped(String, String),            // (轮次 id, 结果)
     Wake,                              // 后台查完额度了：重画
     PluginTab(String, String, String), // (插件, 动作, 它开出来的标签页)
+    Classified(bool),                  // 后台分完一批章（成功没有）：重读分章文件
 }
 
 fn sock_of(pane: &str) -> PathBuf {
@@ -104,6 +107,12 @@ struct Trail {
     last_screen: u64,            // 上次读到的 Claude 屏幕（哈希）：没变就不用再认
     jumping_until: Option<Instant>, // 点了一轮、正在替 Claude 翻屏：这期间不跟，免得和翻屏打架
     reveal: bool,                // 选中的那一轮刚被跟着换了：画的时候把它滚进列表的可见范围
+    marks: Marks,                // 这个会话哪几轮开新章（chapters.rs）
+    chaps: Vec<Chapter>,         // 上一帧切出来的章（点击时按它认）
+    chap_open: Vec<bool>,        // 上一帧每一章展没展开
+    chap_fold: HashMap<String, bool>, // 你点过的章（按开头那一轮的 id）：展开 / 收起；没点过的只展开选中的那一章
+    classifying: bool,           // 正在后台调 Haiku 分章
+    next_classify: Instant,
     no_claude_since: Option<Instant>,
     jump_token: Arc<AtomicUsize>,
     last_wide: Option<i64>,
@@ -201,6 +210,8 @@ impl Trail {
             self.expanded = false;
             self.missing.clear();
             self.follow = true;
+            self.chap_fold.clear();
+            self.marks = self.sid.as_deref().map(Marks::load).unwrap_or_default();
             if self.sid.is_some() {
                 self.cfg_dir = claude::config_dir_of_pid(herdr::claude_pid(&self.target));
             }
@@ -783,8 +794,72 @@ impl Trail {
         self.menu = Some(ui::Menu { x, y, items });
     }
 
+    /// 后台让 Haiku 判断还没判过的话哪几句开新章（只在你看着这个 Claude 时做：没看的会话不花额度）。
+    fn classify(&mut self, tx: &Sender<Msg>) {
+        if self.cfg.chapters != "auto" || self.classifying || Instant::now() < self.next_classify {
+            return;
+        }
+        let (Some(sid), Some(tr)) = (self.sid.clone(), &self.tr) else { return };
+        let stops = tr.visible();
+        let new: Vec<usize> = self.marks.pending(&stops).into_iter().take(chapters::BATCH).collect();
+        if new.is_empty() {
+            return;
+        }
+        let Some(lock) = chapters::Lock::take() else {
+            self.next_classify = Instant::now() + Duration::from_secs(5); // 别的轨迹在调：等一会儿
+            return;
+        };
+        let input = chapters::request(&self.marks, &stops, &new);
+        let ids: Vec<(usize, String)> = new.iter().map(|&i| (i, stops[i].id.clone())).collect();
+        let (cfg_dir, tx) = (self.cfg_dir.clone(), tx.clone());
+        self.classifying = true;
+        std::thread::spawn(move || {
+            let t0 = Instant::now();
+            let r = chapters::ask(&cfg_dir, &input).and_then(|out| chapters::parse(&out, &new));
+            chapters::log(&sid, new.len(), &r, t0.elapsed().as_secs_f64());
+            if let Ok(found) = &r {
+                chapters::merge(&sid, found, &ids);
+            }
+            drop(lock);
+            let _ = tx.send(Msg::Classified(r.is_ok()));
+        });
+    }
+
+    /// 在一轮 / 一章的章名上右键：从这一轮开新章，或者把这一章并回上一章。菜单文字不超过 11 列：细条只有 17 列宽，框和边距占 6 列
+    fn chapter_menu(&mut self, it: Item, x: u16, y: u16) {
+        let Some(tr) = &self.tr else { return };
+        let stops = tr.visible();
+        let (i, starts) = match it {
+            Item::Chapter(ci) => match self.chaps.get(ci) {
+                Some(c) => (c.start, true),
+                None => return,
+            },
+            Item::Stop(i) => (i, self.chaps.iter().any(|c| c.start == i)),
+            Item::Fold => return,
+        };
+        if i == 0 || i >= stops.len() {
+            return; // 第一轮总是第一章的开头
+        }
+        let (key, label) = if starts {
+            (format!("chap join {}", stops[i].id), t("并回上一章"))
+        } else {
+            (format!("chap new {}", stops[i].id), t("这里开新章"))
+        };
+        self.menu = Some(ui::Menu { x, y, items: vec![(key, label, false)] });
+    }
+
     /// 换账号：要等 Claude 退出重起，几秒到几十秒，放到后台线程里做，进展和结果在表头闪出来。
     fn apply_setting(&mut self, kind: &str, value: &str, tx: &Sender<Msg>) {
+        if kind == "chap" {
+            // 手动标的记进分章文件，盖过 Haiku 的判断（重新读一遍再写：另一个轨迹可能刚写过）
+            if let (Some(sid), Some((how, id))) = (self.sid.clone(), value.split_once(' ')) {
+                let mut m = Marks::load(&sid);
+                m.manual.insert(id.to_owned(), how == "new");
+                m.save(&sid);
+                self.marks = m;
+            }
+            return;
+        }
         if kind != "acct" {
             return;
         }
@@ -1043,6 +1118,12 @@ pub fn run(cfg: Config) {
         last_screen: 0,
         jumping_until: None,
         reveal: false,
+        marks: Marks::default(),
+        chaps: Vec::new(),
+        chap_open: Vec::new(),
+        chap_fold: HashMap::new(),
+        classifying: false,
+        next_classify: Instant::now(),
         no_claude_since: None,
         jump_token: Arc::new(AtomicUsize::new(0)),
         last_wide: None,
@@ -1150,6 +1231,19 @@ fn run_loop(
             let (model, ctx) = s.model_ctx();
             let usage = claude::read_usage(&s.cfg_dir, s.sid.as_deref(), s.cfg.live_usage);
             let stops = s.tr.as_ref().map(|t| t.visible()).unwrap_or_default();
+            let chaps = if s.cfg.chapters == "off" { Vec::new() } else { s.marks.chapters(&stops) };
+            // 展开哪几章：点过的照你点的；没点过的只展开选中的那一轮所在的章（还没选中就是最后一章）
+            let at = stops.iter().position(|st| Some(st.id.as_str()) == s.opened.as_deref());
+            let chap_open: Vec<bool> = chaps
+                .iter()
+                .enumerate()
+                .map(|(ci, c)| {
+                    s.chap_fold.get(&stops[c.start].id).copied().unwrap_or(match at {
+                        Some(i) => (c.start..c.end).contains(&i),
+                        None => ci + 1 == chaps.len(),
+                    })
+                })
+                .collect();
             let view = ui::View {
                 stops: &stops,
                 narrow,
@@ -1157,6 +1251,8 @@ fn run_loop(
                 opened: s.opened.as_deref(),
                 busy: s.busy(),
                 missing: &s.missing,
+                chapters: &chaps,
+                open: &chap_open,
             };
             let items = view.items();
             let room = size.width.saturating_sub(2) as usize;
@@ -1190,9 +1286,7 @@ fn run_loop(
                 s.offset = s.offset.min(bottom);
                 // 选中跟着 Claude 的屏幕换了：不在露出来的范围里就滚过去（停在它上面一项）
                 if s.reveal
-                    && let Some(k) = items
-                        .iter()
-                        .position(|it| matches!(it, Item::Stop(i) if Some(stops[*i].id.as_str()) == view.opened))
+                    && let Some(k) = items.iter().position(|&it| view.selected(it))
                     && !ui::visible(&view, &items, s.offset, rows, room).contains(&items[k])
                 {
                     s.offset = k.saturating_sub(1).min(bottom);
@@ -1212,6 +1306,8 @@ fn run_loop(
             }
             s.reveal = false;
             s.view = counts;
+            s.chaps = chaps.clone();
+            s.chap_open = chap_open.clone();
             let tag = |arrow: &str, n: usize| {
                 if n > 0 {
                     format!("{arrow}{}{n}", if narrow { "" } else { " " })
@@ -1372,10 +1468,21 @@ fn run_loop(
                     // 表头的字从第 3 列开始（左边 2 列和列表的指针对齐）；列号从 1 数
                     s.header_click(m.row as usize + 1, (m.column as usize).saturating_sub(1), size.width, tx);
                 }
+                MouseEventKind::Down(MouseButton::Right) if s.cfg.chapters != "off" => {
+                    if let Some(&(_, it)) = s.hits.iter().find(|(row, _)| *row == m.row) {
+                        s.chapter_menu(it, m.column, m.row + 1);
+                    }
+                }
                 MouseEventKind::Down(MouseButton::Left) => {
                     if let Some(&(_, it)) = s.hits.iter().find(|(row, _)| *row == m.row) {
                         match it {
                             Item::Fold => s.expanded = !s.expanded,
+                            Item::Chapter(ci) => {
+                                if let (Some(c), Some(tr)) = (s.chaps.get(ci), &s.tr) {
+                                    let open = s.chap_open.get(ci).copied().unwrap_or(false);
+                                    s.chap_fold.insert(tr.visible()[c.start].id.clone(), !open);
+                                }
+                            }
                             Item::Stop(i) => {
                                 let id = s.tr.as_ref().map(|t| t.visible()[i].id.clone());
                                 s.opened = id;
@@ -1438,6 +1545,16 @@ fn run_loop(
                 redraw = false;
                 continue;
             }
+            Ok(Msg::Classified(ok)) => {
+                s.classifying = false;
+                if ok {
+                    if let Some(sid) = &s.sid {
+                        s.marks = Marks::load(sid);
+                    }
+                } else {
+                    s.next_classify = Instant::now() + CLASSIFY_RETRY;
+                }
+            }
             Ok(Msg::Jumped(ids, how)) => {
                 s.jumping_until = None;
                 for id in ids.split(',') {
@@ -1497,6 +1614,9 @@ fn run_loop(
             if s.no_claude_since.is_some() {
                 due.push(now + GONE_GRACE + Duration::from_millis(500));
             }
+        }
+        if s.pair_focused {
+            s.classify(tx); // 有没判过的话就去分章（一批分完接着下一批）
         }
     }
 }

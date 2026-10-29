@@ -1,6 +1,7 @@
 //! statetrail（herdr 版，Rust）：Claude Code 会话轨迹，停在 Claude 窗格右边。
 //! 子命令和 Python 版 trail.py 一一对应：pane（轨迹窗格本身）、toggle（插件动作）、auto（事件钩子：默认打开）。
 
+mod chapters;
 mod claude;
 mod header;
 mod herdr;
@@ -71,6 +72,7 @@ pub struct Config {
     pub tool_height: f64,     // 按钮开的工具占 Claude 那一格高度的比例（按钮自己没写 height 时）
     pub plugin_buttons: bool, // 底部在自己的按钮后面（│ 隔开）列出装了的其他 herdr 插件
     pub plugins: HashMap<String, PluginCfg>,
+    pub chapters: String, // "auto"（Haiku 分章，右键可改）/ "manual"（只按你右键标的分）/ "off"（不分章）
 }
 
 /// 底部的自定义按钮（配置里的 [[buttons]]），和 Python 版 DEFAULTS["buttons"] 同义：
@@ -183,6 +185,12 @@ pub fn config() -> Config {
             .map_or(0.5, |h| h.clamp(0.1, 0.9)),
         plugin_buttons: table.get("plugin_buttons").and_then(toml::Value::as_bool).unwrap_or(true),
         plugins: parse_plugins(table.get("plugins")),
+        chapters: table
+            .get("chapters")
+            .and_then(toml::Value::as_str)
+            .filter(|v| ["auto", "manual", "off"].contains(v))
+            .unwrap_or("auto")
+            .to_owned(),
     }
 }
 

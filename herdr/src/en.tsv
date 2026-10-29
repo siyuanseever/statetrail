@@ -95,3 +95,7 @@ Claude 正在工作或等你确认，等它停下再换	Claude is busy or waitin
 按了 s 没看到确认，请看一眼 Claude	pressed s but saw no confirmation; check Claude
 没看到 Claude 的回应，请看一眼	no reply from Claude; take a look
 下一条会重读整段对话	next reply re-reads the whole conversation
+第 {a}–{b} 轮	turns {a}–{b}
+第 {a} 轮	turn {a}
+这里开新章	New chapter
+并回上一章	Join above
