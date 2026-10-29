@@ -180,8 +180,6 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
         Item::Stop(i) => {
             let st = v.stops[i];
             let n = i + 1;
-            // 分章时轮次往右缩进，看得出是章下面的
-            let ind = if v.chapters.is_empty() { "" } else if v.narrow { " " } else { "  " };
             let ask = if st.kind == "human" {
                 oneline(&st.prompt)
             } else {
@@ -198,7 +196,8 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
                 } else {
                     Style::default()
                 };
-                let head = format!("{ind}{n} ");
+                // 分章时轮次也不缩进：细条本来就窄（用户 2026-10-29：「你不要右移，你就直接放到最左侧」）
+                let head = format!("{n} ");
                 return vec![Line::from(vec![
                     Span::styled(head.clone(), dimc),
                     Span::styled(clip(&ask, room.saturating_sub(head.width()), false), style),
@@ -211,7 +210,7 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
             if missing {
                 gone += &format!(" · {}", t("主界面已无"));
             }
-            let meta = format!("{ind} {n} {}{gone}", when(st.ts.as_deref()));
+            let meta = format!(" {n} {}{gone}", when(st.ts.as_deref()));
             let reply = if last_busy {
                 t("（Claude 还在干活…）")
             } else if st.reply.is_empty() {
@@ -226,8 +225,8 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
                     Span::styled(meta.clone(), faint),
                     Span::styled(format!(" {}", t("你说的：")), Style::default().add_modifier(Modifier::BOLD)),
                 ]));
-                for l in wrap(st.prompt.trim(), room.saturating_sub(4 + ind.len()).max(10)) {
-                    lines.push(Line::from(format!("{ind}   {l}")));
+                for l in wrap(st.prompt.trim(), room.saturating_sub(4).max(10)) {
+                    lines.push(Line::from(format!("   {l}")));
                 }
             } else {
                 let rest = room.saturating_sub(meta.width() + 1);
@@ -238,7 +237,7 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
                     Span::styled(clip(&ask, rest, true), ask_style),
                 ]));
             }
-            lines.push(Line::from(Span::styled(clip(&format!("{ind}   {reply}"), room, true), faint)));
+            lines.push(Line::from(Span::styled(clip(&format!("   {reply}"), room, true), faint)));
             lines
         }
     }
