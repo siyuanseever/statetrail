@@ -166,22 +166,26 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
             let n = ch.end - ch.start;
             // 章与章的分隔要比轮与轮的明显（用户 2026-10-29：「章节跟章节之间的分隔应该要更明显」）：一章的轮次左边有一条竖线，
             // 章名行和宽版章前的空行不画，竖线在换章处断开（见 draw）；轮与轮之间的虚线缩进到回复下面
-            if v.narrow {
-                // 收着时在后面写这一章有几轮
-                let tail = if open { String::new() } else { format!(" {n}") };
-                let title = clip(&ch.title, room.saturating_sub(2 + tail.width()), false);
-                return vec![Line::from(vec![arrow, Span::styled(title, aux), Span::styled(tail, aux)])];
-            }
-            let range = if n > 1 {
-                t("第 {a}–{b} 轮").replace("{a}", &(ch.start + 1).to_string()).replace("{b}", &ch.end.to_string())
+            // 收着时在最右边写这一章收了几轮；第几轮到第几轮不写（用户 2026-10-29：「更关键的是它折叠了多少轮」）。展开时轮次就在下面，不写。
+            // 数字是要看的，用正常前景色，不跟章名一样淡
+            let tail = if open {
+                String::new()
+            } else if v.narrow {
+                n.to_string()
+            } else if n == 1 {
+                t("1 轮")
             } else {
-                t("第 {a} 轮").replace("{a}", &(ch.start + 1).to_string())
+                t("{n} 轮").replace("{n}", &n.to_string())
             };
-            // 不写时间：每一轮自己那一行有时间，写在这里只会被截成「…」
-            let meta = clip(&format!("  {range}"), room / 2, true);
-            let title = clip(&ch.title, room.saturating_sub(2 + meta.width() + 4), true);
-            let head = Line::from(vec![arrow, Span::styled(title, aux), Span::styled(meta, faint)]);
-            if ci == 0 { vec![head] } else { vec![Line::default(), head] }
+            let title = clip(&ch.title, room.saturating_sub(2 + tail.width() + 1), !v.narrow);
+            let pad = room.saturating_sub(2 + title.width() + tail.width());
+            let head = Line::from(vec![arrow, Span::styled(title, aux), Span::raw(" ".repeat(pad)), Span::raw(tail)]);
+            if v.narrow {
+                return vec![head];
+            }
+            // 空一行只在挨着展开的那章时：收着的章一章一行连着排，不然全收着时一半是空行
+            let gap = ci > 0 && (open || v.open.get(ci - 1) == Some(&true));
+            if gap { vec![Line::default(), head] } else { vec![head] }
         }
         Item::Stop(i) => {
             let st = v.stops[i];
@@ -550,7 +554,7 @@ mod tests {
         }
     }
 
-    fn screen(narrow: bool, width: u16) -> Vec<String> {
+    fn screen(narrow: bool, width: u16, open: &[bool]) -> Vec<String> {
         let s = [
             stop("a", "做 A", "好的，A 做完了"),
             stop("b", "再改一下 A", "改好了"),
@@ -570,7 +574,7 @@ mod tests {
             busy: false,
             missing: &missing,
             chapters: &ch,
-            open: &[true, true],
+            open,
         };
         let mut term = ratatui::Terminal::new(TestBackend::new(width, 16)).unwrap();
         term.draw(|f| {
@@ -599,20 +603,30 @@ mod tests {
     /// 宽版：章名是一条补满的实线；同一章里的轮次之间是虚线，章的最后一轮后面不画虚线
     #[test]
     fn chapter_is_a_rule() {
-        let w = screen(false, 40);
+        let w = screen(false, 40, &[true, true]);
         for l in &w {
             println!("|{l}");
         }
-        assert!(w[1].starts_with("  ▾ 甲任务  ")); // 章名行左边没有竖线
+        assert_eq!(w[1], "  ▾ 甲任务"); // 章名行左边没有竖线；展开时不写轮数
         assert!(w[2].starts_with("│  1") && w[3].starts_with("│ ")); // 轮次和回复左边有竖线
         assert!(w[4].starts_with("│    ┈")); // 轮与轮之间：缩进的虚线，竖线不断
         assert_eq!(w[7], ""); // 换章：空一行，竖线断开
         assert!(w[8].starts_with("  ▾ 丙任务") && w[9].starts_with("│  3"));
-        let n = screen(true, 17);
+        let n = screen(true, 17, &[true, true]);
         for l in &n {
             println!("|{l}");
         }
         assert_eq!(n[1], "  ▾ 甲任务");
         assert!(n[2].starts_with("│ 1") && n[3].starts_with("│ 2") && n[4] == "  ▾ 丙任务" && n[5].starts_with("│ 3"));
+    }
+
+    /// 收着的章：最右边写收了几轮，不写第几轮到第几轮
+    #[test]
+    fn shut_chapter_shows_count() {
+        let w = screen(false, 40, &[false, true]);
+        assert!(w[1].starts_with("  ▸ 甲任务") && w[1].ends_with(&format!(" {}", t("{n} 轮").replace("{n}", "2"))) && w[1].width() == 40, "{:?}", w[1]);
+        assert!(!w[1].contains("1–2"));
+        let n = screen(true, 17, &[false, true]);
+        assert!(n[1].starts_with("  ▸ 甲任务") && n[1].ends_with(" 2") && n[1].width() == 17, "{:?}", n[1]);
     }
 }

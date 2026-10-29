@@ -111,7 +111,7 @@ struct Trail {
     marks: Marks,                // 这个会话哪几轮开新章（chapters.rs）
     chaps: Vec<Chapter>,         // 上一帧切出来的章（点击时按它认）
     chap_open: Vec<bool>,        // 上一帧每一章展没展开
-    chap_fold: HashMap<String, bool>, // 你点过的章（按开头那一轮的 id）：展开 / 收起；没点过的展开
+    outline: bool,               // 在章那一层：所有章收着，选中按章挪（← 进来，→ / Enter 出去）
     classifying: bool,           // 正在后台调 Haiku 分章
     next_classify: Instant,
     no_claude_since: Option<Instant>,
@@ -211,7 +211,7 @@ impl Trail {
             self.expanded = false;
             self.missing.clear();
             self.follow = true;
-            self.chap_fold.clear();
+            self.outline = false;
             self.marks = self.sid.as_deref().map(Marks::load).unwrap_or_default();
             if self.sid.is_some() {
                 self.cfg_dir = claude::config_dir_of_pid(herdr::claude_pid(&self.target));
@@ -375,19 +375,16 @@ impl Trail {
 
     /// 选中往上 / 往下挪几格（滚轮一格一格，↑↓ 也是），列表跟着滚到它（用户 2026-10-29：「不要鼠标滚动翻页的效果，
     /// 而是鼠标滚动时选中项上下移动」「键盘也不能操作滚动」「enter 来确认跳转」）。只挪选中，不跳：按 Enter 才让 Claude 跳过去。
-    /// 一格是展开的章里的一轮，或者一整个收着的章（选中记成它的第一轮，章名那一行亮）；展开的章名不停
     fn move_sel(&mut self, d: isize) {
         let Some(tr) = &self.tr else { return };
         let stops = tr.visible();
         let Some(last) = stops.len().checked_sub(1) else { return };
-        let mut cells: Vec<std::ops::Range<usize>> = Vec::new();
-        let mut i = 0;
-        while i <= last {
-            let shut = self.chaps.iter().zip(&self.chap_open).find(|(c, open)| !**open && c.start == i);
-            let end = shut.map_or(i + 1, |(c, _)| c.end.min(last + 1).max(i + 1));
-            cells.push(i..end);
-            i = end;
-        }
+        // 章那一层一章一格（选中记成它的第一轮）；轮那一层一轮一格，挪进别的章那一章就展开、原来那章收起
+        let cells: Vec<std::ops::Range<usize>> = if self.outline && !self.chaps.is_empty() {
+            self.chaps.iter().map(|c| c.start..c.end.min(last + 1)).collect()
+        } else {
+            (0..=last).map(|i| i..i + 1).collect()
+        };
         let cur = stops.iter().position(|st| Some(st.id.as_str()) == self.opened.as_deref()).unwrap_or(last);
         let at = cells.iter().position(|r| r.contains(&cur)).unwrap_or(cells.len() - 1);
         let to = at.saturating_add_signed(d).min(cells.len() - 1);
@@ -407,24 +404,15 @@ impl Trail {
     }
 
     /// 在章和轮两层之间来回（用户 2026-10-29：「像我们之前做 Packer 一样，可以在层级之间来回跳转选择」）。
-    /// ← 收起所有章，只剩章名，选中跳到当前这一轮所在的章；→ / Enter 把章全部展开回去，选中这一章的第一轮，章名顶到最上面。
+    /// ← 收起所有章，只剩章名，选中跳到当前这一轮所在的章；→ / Enter 展开选中的章（别的章照旧收着），选中它的第一轮，章名顶到最上面。
     fn outline(&mut self, up: bool) -> bool {
-        let Some(tr) = &self.tr else { return false };
-        if self.chaps.is_empty() {
+        if self.chaps.is_empty() || self.outline == up {
             return false;
         }
-        let stops = tr.visible();
+        self.outline = up;
         if up {
-            for c in &self.chaps {
-                if let Some(st) = stops.get(c.start) {
-                    self.chap_fold.insert(st.id.clone(), false);
-                }
-            }
             self.reveal = true;
         } else {
-            let Some(ci) = self.shut_chapter() else { return false };
-            self.opened = stops.get(self.chaps[ci].start).map(|st| st.id.clone());
-            self.chap_fold.clear();
             self.reveal_top = true;
         }
         self.follow = false;
@@ -1217,7 +1205,7 @@ pub fn run(cfg: Config) {
         marks: Marks::default(),
         chaps: Vec::new(),
         chap_open: Vec::new(),
-        chap_fold: HashMap::new(),
+        outline: false,
         classifying: false,
         next_classify: Instant::now(),
         no_claude_since: None,
@@ -1328,10 +1316,15 @@ fn run_loop(
             let usage = claude::read_usage(&s.cfg_dir, s.sid.as_deref(), s.cfg.live_usage);
             let stops = s.tr.as_ref().map(|t| t.visible()).unwrap_or_default();
             let chaps = if s.cfg.chapters == "off" { Vec::new() } else { s.marks.chapters(&stops) };
-            // 展开哪几章：默认全展开（用户 2026-10-29：「默认不要折叠呀」），你点章名收起的才收着
+            // 同时只展开一章：选中的那一轮所在的章，别的章都收着（用户 2026-10-29：「同时只会有一个章节被展开，其他章节全部都是折叠的」；
+            // 之前说的「默认不要折叠」是在还不能按章挪的时候）。在章那一层（←）全部收着。没选中时算最新一轮
+            let sel = stops
+                .iter()
+                .position(|st| Some(st.id.as_str()) == s.opened.as_deref())
+                .unwrap_or(stops.len().saturating_sub(1));
             let chap_open: Vec<bool> = chaps
                 .iter()
-                .map(|c| s.chap_fold.get(&stops[c.start].id).copied().unwrap_or(true))
+                .map(|c| !s.outline && (c.start..c.end).contains(&sel))
                 .collect();
             let view = ui::View {
                 stops: &stops,
@@ -1569,8 +1562,16 @@ fn run_loop(
                             Item::Fold => s.expanded = !s.expanded,
                             Item::Chapter(ci) => {
                                 if let (Some(c), Some(tr)) = (s.chaps.get(ci), &s.tr) {
-                                    let open = s.chap_open.get(ci).copied().unwrap_or(false);
-                                    s.chap_fold.insert(tr.visible()[c.start].id.clone(), !open);
+                                    // 点展开着的那一章 = 退到章那一层；点收着的章 = 展开它、选中它的第一轮
+                                    if s.chap_open.get(ci) == Some(&true) {
+                                        s.outline = true;
+                                        s.reveal = true;
+                                    } else {
+                                        s.opened = tr.visible().get(c.start).map(|st| st.id.clone());
+                                        s.outline = false;
+                                        s.reveal_top = true;
+                                    }
+                                    s.follow = false;
                                 }
                             }
                             Item::Stop(i) => {
