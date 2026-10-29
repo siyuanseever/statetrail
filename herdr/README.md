@@ -26,7 +26,7 @@ statetrail is for the session you are in: it stays beside the live Claude and fo
   (and pages to it); back at the bottom it marks the latest turn. Only the trail next to the Claude you are in does
   this, reading Claude's screen twice a second (about 0.1% of one core); every other trail stays asleep.
 - **Chapters.** Turns are grouped by task: each new request or problem starts a chapter with a short title, and its
-  turns sit indented under it. Only the chapter you are in is open; click a title to open or close one. Claude Haiku
+  turns sit indented under it. All chapters start open; click a title to close or reopen one. Claude Haiku
   decides where chapters start by reading what you typed (only for the Claude you are looking at, once per message,
   about $0.002 for 80 messages). Right-click a turn for *New chapter* or a title for *Join above* when it guessed
   wrong; your marks win. `chapters = "manual"` keeps only your marks, `"off"` keeps the flat list.

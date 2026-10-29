@@ -109,8 +109,10 @@ struct Trail {
     reveal: bool,                // 选中的那一轮刚被跟着换了：画的时候把它滚进列表的可见范围
     marks: Marks,                // 这个会话哪几轮开新章（chapters.rs）
     chaps: Vec<Chapter>,         // 上一帧切出来的章（点击时按它认）
+    items: Vec<Item>,            // 上一帧列表里的项（滚轮按它数轮次）
+    bottom: usize,               // 上一帧停在最底时的 offset
     chap_open: Vec<bool>,        // 上一帧每一章展没展开
-    chap_fold: HashMap<String, bool>, // 你点过的章（按开头那一轮的 id）：展开 / 收起；没点过的只展开选中的那一章
+    chap_fold: HashMap<String, bool>, // 你点过的章（按开头那一轮的 id）：展开 / 收起；没点过的展开
     classifying: bool,           // 正在后台调 Haiku 分章
     next_classify: Instant,
     no_claude_since: Option<Instant>,
@@ -370,6 +372,21 @@ impl Trail {
         self.opened = Some(stops[i].id.clone());
         self.reveal = true;
         true
+    }
+
+    /// 滚轮：按轮次数，翻 WHEEL 轮，章名不占步数（用户 2026-10-29：「滑动就要在对应的 conversation 级别」「章节只是一个辅助作用」）。
+    /// 停在一章的第一轮上时把章名也露出来。
+    fn wheel(&mut self, down: bool) {
+        let (mut k, mut n) = (self.offset.min(self.items.len().saturating_sub(1)), 0);
+        while n < WHEEL && if down { k + 1 < self.items.len() } else { k > 0 } {
+            k = if down { k + 1 } else { k - 1 };
+            n += usize::from(matches!(self.items[k], Item::Stop(_)));
+        }
+        if k > 0 && matches!(self.items[k - 1], Item::Chapter(_)) && matches!(self.items[k], Item::Stop(_)) {
+            k -= 1;
+        }
+        self.offset = k;
+        self.follow = down && k >= self.bottom; // 到底了就重新跟着走
     }
 
     fn page(&mut self, d: i32) {
@@ -1120,6 +1137,8 @@ pub fn run(cfg: Config) {
         reveal: false,
         marks: Marks::default(),
         chaps: Vec::new(),
+        items: Vec::new(),
+        bottom: 0,
         chap_open: Vec::new(),
         chap_fold: HashMap::new(),
         classifying: false,
@@ -1232,17 +1251,10 @@ fn run_loop(
             let usage = claude::read_usage(&s.cfg_dir, s.sid.as_deref(), s.cfg.live_usage);
             let stops = s.tr.as_ref().map(|t| t.visible()).unwrap_or_default();
             let chaps = if s.cfg.chapters == "off" { Vec::new() } else { s.marks.chapters(&stops) };
-            // 展开哪几章：点过的照你点的；没点过的只展开选中的那一轮所在的章（还没选中就是最后一章）
-            let at = stops.iter().position(|st| Some(st.id.as_str()) == s.opened.as_deref());
+            // 展开哪几章：默认全展开（用户 2026-10-29：「默认不要折叠呀」），你点章名收起的才收着
             let chap_open: Vec<bool> = chaps
                 .iter()
-                .enumerate()
-                .map(|(ci, c)| {
-                    s.chap_fold.get(&stops[c.start].id).copied().unwrap_or(match at {
-                        Some(i) => (c.start..c.end).contains(&i),
-                        None => ci + 1 == chaps.len(),
-                    })
-                })
+                .map(|c| s.chap_fold.get(&stops[c.start].id).copied().unwrap_or(true))
                 .collect();
             let view = ui::View {
                 stops: &stops,
@@ -1280,6 +1292,7 @@ fn run_loop(
             loop {
                 let rows = (size.height as usize).saturating_sub(head_len + 1 + 1 + foot_len);
                 let bottom = ui::bottom_offset(&view, &items, room, rows);
+                s.bottom = bottom;
                 if s.follow {
                     s.offset = bottom;
                 }
@@ -1307,6 +1320,7 @@ fn run_loop(
             s.reveal = false;
             s.view = counts;
             s.chaps = chaps.clone();
+            s.items = items.clone();
             s.chap_open = chap_open.clone();
             let tag = |arrow: &str, n: usize| {
                 if n > 0 {
@@ -1415,18 +1429,8 @@ fn run_loop(
                         continue;
                     }
                 }
-                MouseEventKind::ScrollUp => {
-                    s.offset = s.offset.saturating_sub(WHEEL);
-                    s.follow = false;
-                }
-                MouseEventKind::ScrollDown => {
-                    s.offset += WHEEL; // 画的时候按最底夹住；到底了就重新跟着走
-                    s.follow = false;
-                    let tr_len = s.tr.as_ref().map_or(0, |t| t.visible().len());
-                    if s.offset >= tr_len {
-                        s.follow = true;
-                    }
-                }
+                MouseEventKind::ScrollUp => s.wheel(false),
+                MouseEventKind::ScrollDown => s.wheel(true), // 画的时候按最底夹住
                 MouseEventKind::Down(_) if s.menu.is_some() => {
                     // 下拉菜单开着：点中一项就去换，点哪儿都先把菜单收起来
                     let hit = s
