@@ -162,9 +162,9 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
             let aux = Style::default().fg(c.grey); // 中间那档灰：比轮次的字淡，又不像 dim 那样暗到读不出来
             let arrow = Span::styled(if open { "▾ " } else { "▸ " }, aux);
             let n = ch.end - ch.start;
-            // 章名后面用实线补满整行：章名是一条分节线，和回复那一行（文字）、轮与轮之间的虚线形状都不一样
-            // （用户 2026-10-29：宽版「回答的视觉效果跟章节一样」「轮之间的分割线和章节的分割线一模一样，没法区分每个章节」）
-            let rule = |used: usize| Span::styled(if room > used + 1 { format!(" {}", "─".repeat(room - used - 1)) } else { String::new() }, dimc);
+            // 章与章的分隔要比轮与轮的明显（用户 2026-10-29：「章节跟章节之间的分隔应该要更明显」）：章名后面用粗实线 ━ 补满整行，
+            // 颜色和章名一样是 grey（比轮次之间的虚线亮一档）；宽版每章前面再空一行。轮与轮之间的虚线缩进到回复下面，见 draw
+            let rule = |used: usize| Span::styled(if room > used + 1 { format!(" {}", "━".repeat(room - used - 1)) } else { String::new() }, aux);
             if v.narrow {
                 // 收着时在后面写这一章有几轮
                 let tail = if open { String::new() } else { format!(" {n}") };
@@ -177,12 +177,12 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
             } else {
                 t("第 {a} 轮").replace("{a}", &(ch.start + 1).to_string())
             };
-            let at = when(v.stops[ch.start].ts.as_deref());
-            let meta = if at.is_empty() { format!("  {range}") } else { format!("  {range} · {at}") };
-            let meta = clip(&meta, room / 2, true);
+            // 不写时间：每一轮自己那一行有时间，写在这里只会被截成「…」
+            let meta = clip(&format!("  {range}"), room / 2, true);
             let title = clip(&ch.title, room.saturating_sub(2 + meta.width() + 4), true);
             let used = 2 + title.width() + meta.width();
-            vec![Line::from(vec![arrow, Span::styled(title, aux), Span::styled(meta, faint), rule(used)])]
+            let head = Line::from(vec![arrow, Span::styled(title, aux), Span::styled(meta, faint), rule(used)]);
+            if ci == 0 { vec![head] } else { vec![Line::default(), head] }
         }
         Item::Stop(i) => {
             let st = v.stops[i];
@@ -406,7 +406,7 @@ pub fn draw(f: &mut Frame, header: &[SLine], footer: &[SLine], v: &View, offset:
         }
         if dashed(v, it) {
             lines.push(Line::from(Span::styled(
-                format!("  {}", "┈".repeat(room)),
+                format!("     {}", "┈".repeat(room.saturating_sub(3))), // 缩进到回复下面：它只分同一章里的轮次，比章的分隔弱
                 Style::default().fg(c.dim),
             )));
         }
@@ -582,13 +582,14 @@ mod tests {
         for l in &w {
             println!("|{l}");
         }
-        assert!(w[1].starts_with("  ▾ 甲任务  ") && w[1].ends_with("──") && !w[1].contains('·'));
-        assert!(w[4].trim_start().starts_with("┈"));
-        assert!(w[7].contains("▾ 丙任务")); // 第 2 轮的回复后面直接是下一章的实线
+        assert!(w[1].starts_with("  ▾ 甲任务  ") && w[1].ends_with("━━"));
+        assert!(w[4].starts_with("     ┈")); // 轮与轮之间：缩进的虚线
+        assert_eq!(w[7], ""); // 换章：第 2 轮的回复后面空一行，再是下一章的粗实线
+        assert!(w[8].contains("▾ 丙任务") && w[8].ends_with("━━"));
         let n = screen(true, 17);
         for l in &n {
             println!("|{l}");
         }
-        assert_eq!(n[1], "  ▾ 甲任务 ──────");
+        assert_eq!(n[1], "  ▾ 甲任务 ━━━━━━");
     }
 }
