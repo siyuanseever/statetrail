@@ -110,6 +110,10 @@ herdr plugin install siyuanseever/statetrail/herdr
   本机试装：unlink 本地版 → `herdr plugin install siyuanseever/statetrail/herdr --ref v0.2.0-rc.1 --yes` → 装上的 `bin/statetrail` 的 sha256
   （`c3babc4d…`）和 Release 里 aarch64-apple-darwin 包解出来的一样，插件目录里没有 `target/`（是下载的、不是现编的）；26 个轨迹都换成从
   安装目录起，表头正常。试完 `herdr plugin link` 回本地 `herdr/`。main 可以从 rust 快进（main 上没有 rust 没有的提交）。
+- **v0.2.0 已发、上市场**（2026-10-28）：main 快进 `6d2dabe..93c5083`，索引 04:00:29Z 显示 0.2.0。
+- **v0.2.1 已发、上市场**（2026-10-29，用户「发布到市场里吧」）：带跟屏幕选中、Haiku 分章（竖线、青色章名、右键改）、滚轮 / 键盘挪选中 + Enter 跳转。
+  版本提交 `402361d`（这次 Cargo.toml 也改，`statetrail version` 报 0.2.1）；CI run 40849341192 四个平台 + release 全成功，正式版 8 个文件；
+  下载 aarch64-apple-darwin 包，sha256 `0f4a803b…` 与 .sha256 一致、解出来报 0.2.1。main 快进 `93c5083..402361d`，索引 09:30:54Z 显示 0.2.1。
 
 ## 本机从 tmux 迁到 herdr 之后补的（2026-10-26）
 
