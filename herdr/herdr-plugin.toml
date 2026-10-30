@@ -23,6 +23,14 @@ description = "Open the trail beside the focused Claude Code pane, or switch it 
 contexts = ["pane"]
 command = ["bin/statetrail", "toggle"]
 
+# 跳到某个 Claude：居中的浮窗，照 tmux 版 picker（prefix+g）的样子；想让 prefix+g 开它，见 README
+[[actions]]
+id = "goto"
+title = "Go to a Claude"
+description = "Every Claude in every workspace, grouped by workspace, with its state and a live preview; Enter jumps there."
+contexts = ["pane"]
+command = ["bin/statetrail", "goto-open"]
+
 [[events]]
 on = "pane.agent_detected"
 command = ["bin/statetrail", "auto"]
@@ -46,3 +54,10 @@ placement = "split"
 # 目录进不去（被删了）就在家目录里开，别让窗格一闪就没了
 command = ["sh", "-c", "cd \"${STATETRAIL_CWD:-$PWD}\" 2>/dev/null || cd \"$HOME\"; exec sh -c \"$STATETRAIL_CMD\""]
 
+[[panes]]
+id = "goto"
+title = "statetrail goto"
+placement = "popup"
+width = "95%"
+height = "85%"
+command = ["bin/statetrail", "goto"]

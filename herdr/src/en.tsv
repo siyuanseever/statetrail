@@ -108,3 +108,28 @@ Tab 搜全部会话	Tab: all sessions
 开着	open
 正在读本机的会话记录…	reading session logs…
 打字搜本机所有会话里你说过的话	type to search what you said in every session
+# 跳转浮窗（goto）
+{n}秒	{n}s
+{n}分钟	{n}m
+{n}小时	{n}h
+{n}天	{n}d
+已运行 {d}	running {d}
+等确认 {d}	waiting {d}
+完成 {d}前	done {d} ago
+{d}前	{d} ago
+{n} 已读	{n} read
+{n} 搁置	{n} stale
+⋯ 收起 {n} 个({kinds}) · a 展开	⋯ {n} folded ({kinds}) · a expand
+✕ 关闭	✕ close
+j/k 选	j/k move
+数字直跳	number jumps
+l 回到列表	l back to list
+h 工作区	h workspaces
+a 收起	a fold
+a 全部	a all
+p 预览	p preview
+/ 搜索	/ search
+Enter 跳转	Enter jump
+Esc 清掉搜索	Esc clears
+没有对得上的	no match
+还没有开着的 Claude	no Claude running

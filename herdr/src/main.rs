@@ -3,6 +3,7 @@
 
 mod chapters;
 mod claude;
+mod goto;
 mod header;
 mod herdr;
 mod i18n;
@@ -361,6 +362,9 @@ fn main() {
         Some("pane") => pane::run(cfg),
         Some("auto") => cmd_auto(&cfg),
         Some("toggle") => cmd_toggle(&cfg),
+        Some("goto") => goto::run(),
+        Some("goto-open") => goto::cmd_open(),
+        Some("goto-list") => goto::cmd_list(),
         Some("pickrepo") => picker::cmd_pickrepo(&std::env::args().nth(2).unwrap_or_default()),
         Some("find") => search::cmd_find(&std::env::args().skip(2).collect::<Vec<_>>().join(" ")),
         Some("switch") => switch::cmd_switch(&std::env::args().skip(2).collect::<Vec<_>>()),

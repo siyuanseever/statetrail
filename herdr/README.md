@@ -112,6 +112,30 @@ command = "statetrail.toggle"
 description = "statetrail: open, or switch wide / narrow"
 ```
 
+### Go to a Claude
+
+`statetrail.goto` opens a centered popup that lists every Claude in every workspace, laid out and driven like the
+tmux picker: grouped by workspace, one row each with a number, the state (`⏸ WAIT` needs your answer, `✔ DONE`
+finished and unseen, `▶ RUN` working, `✓ READ` seen), the name, how long it has been in that state, and the
+session's opening ask. Quiet ones (seen, or finished and untouched for two hours) fold into one line per workspace;
+`a` unfolds. The right half is a live view of the selected Claude; `p` hides it (remembered).
+
+`j` / `k` move, typing a row number jumps (`1` then `2` is row 12), `Enter` or a click jumps there, `/` searches
+names, opening asks and directories, `h` steps up to the workspaces (the right half becomes one card per Claude in
+that workspace, `Enter` switches to it), `l` steps back, `q` / `Esc` closes. To put it on `prefix+g`, move Herdr's
+own Goto to another key:
+
+```toml
+[keys]
+goto = "prefix+shift+g"
+
+[[keys.command]]
+key = "prefix+g"
+type = "plugin_action"
+command = "statetrail.goto"
+description = "statetrail: go to a Claude"
+```
+
 Claude Code should use fullscreen rendering (`/tui fullscreen`), which is what the jump scrolls.
 
 ## Configuration

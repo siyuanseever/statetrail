@@ -86,6 +86,28 @@ command = "statetrail.toggle"
 description = "statetrail：打开，或在宽版 / 窄版之间切换"
 ```
 
+### 跳到某个 Claude
+
+`statetrail.goto` 弹一个居中的浮窗，列出所有工作区里的 Claude，样子和按键照 tmux 版的 picker：
+按工作区分组，一行一个：行号、状态（`⏸ WAIT` 等你确认、`✔ DONE` 做完没看、`▶ RUN` 在跑、`✓ READ` 看过了）、
+名字、这个状态待了多久、开场那句话。安静的（看过的、做完两小时没看的）每组收成一行，`a` 展开。
+右边是选中那个 Claude 的实时画面，`p` 收起（记住你的选择）。
+
+`j` / `k` 选，行号直接跳（`1` 再 `2` 是第 12 个），`Enter` 或点一下跳过去，`/` 搜名字、开场那句话和目录，
+`h` 进到工作区那一层（右边换成这个工作区里每个 Claude 一张卡片，`Enter` 切到那个工作区），`l` 回来，`q` / `Esc` 关。
+想让 `prefix+g` 开它，herdr 自带的 Goto 换个键：
+
+```toml
+[keys]
+goto = "prefix+shift+g"
+
+[[keys.command]]
+key = "prefix+g"
+type = "plugin_action"
+command = "statetrail.goto"
+description = "statetrail：跳到某个 Claude"
+```
+
 Claude Code 要用全屏界面（`/tui fullscreen`），跳转滚的就是它。
 
 ## 配置

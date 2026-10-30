@@ -293,6 +293,33 @@ impl Transcript {
         self.pos > start
     }
 
+    /// 只读 [start, end) 这一段（start 落在一行中间就从下一行算起，end 切断的最后一行不算）：
+    /// 跳转浮窗里每个 Claude 只要开头的第一句话和最后一轮，几十个会话整份读太慢。
+    pub fn slice(path: &Path, start: u64, end: u64) -> Self {
+        let mut tr = Transcript::new(path);
+        let Ok(mut f) = File::open(path) else { return tr };
+        if f.seek(SeekFrom::Start(start)).is_err() {
+            return tr;
+        }
+        let mut r = BufReader::new(std::io::Read::take(f, end.saturating_sub(start)));
+        let mut buf = Vec::new();
+        if start > 0 {
+            let _ = r.read_until(b'\n', &mut buf);
+        }
+        loop {
+            buf.clear();
+            match r.read_until(b'\n', &mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    if let Ok(e) = serde_json::from_slice::<Raw>(&buf) {
+                        tr.feed(&e);
+                    }
+                }
+            }
+        }
+        tr
+    }
+
     fn feed(&mut self, e: &Raw) {
         match (e.kind.as_deref(), e.subtype.as_deref()) {
             (Some("ai-title"), _) => {

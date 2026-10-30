@@ -195,6 +195,21 @@ herdr plugin install siyuanseever/statetrail/herdr
   - 顺手改了截断：命中词在这一行里露得出来就从头显示，露不出来才从命中处前两个字开始（之前宽版也截成「…布到市场里吧」）。
   - 实测（w1:pA）：/ Tab「市场」→ 放大、6 条、按时间排、↓ 选第 2 条、Esc 缩回 41 列；对 w7:pK 的 socket 发 goto → 它选中第 257 轮并让 Claude 去翻
     （太早，Claude 屏幕里没有，jump.log not-found；Claude 窗格回到最底）。**没测**：切到别的窗格（会挪用户的焦点）、新开标签页恢复会话、点结果。
+- **跳到某个 Claude：`statetrail.goto`**（2026-10-30，用户「这个功能做的跟我在 tmux 里的差很多呀，你能不能看怎么把交互逻辑对齐一下，UI 也尽量对齐，
+  或者写的更好看」——说的是 `prefix+g`，herdr 自带的 Goto）：`src/goto.rs`。照 `claude-tmux-sessions` 的 picker（`list-rows.sh` + fzf）：
+  - 外形：herdr 的 popup（manifest 里 `placement = "popup"`，95% × 85%，和 tmux 的 `display-popup -w 95% -h 85%` 一样大）。动作只负责
+    `plugin.pane.open` 开它；popup 收全部按键，进程退出就关。popup 不是窗格、读不到它的屏幕，所以测试时在一个不抢焦点的标签页里直接跑 `statetrail goto`。
+  - 一行：行号、状态、名字（终端标题，没有就用目录名）、这个状态多久、开场那句话（没有就目录）。状态：herdr 的 blocked / working / done / idle
+    对应 tmux 版的 WAIT / RUN / DONE / READ；做完两小时没看的变暗（tmux 版的「搁置」）。组头是工作区编号和名字加各状态个数。
+  - 时间：RUN 从最后一句你说的话算，别的从对话记录最后修改算（herdr 不给状态变化的时间，tmux 版用钩子记的）。只有 RUN 需要往前翻找最后一句话：
+    第一版所有会话都翻，两个末尾全是工具输出的会话各花 86 / 146 毫秒，收集一遍 402 毫秒；改成只翻 RUN 的以后 21 毫秒（`statetrail goto-list` 量的）。
+    之后每秒刷新一次，对话记录只读新追加的部分。
+  - 收起、行号直跳（再按一位不可能有这个号就马上跳，不然等 0.6 秒）、`h` / `l` 两层、`/` 搜索、`a`、`p`、点提示栏的词都照 tmux 版。
+    没搬的：`o` 总览、`t` token 页、`ctrl-x` 归档、编队、底部额度。预览默认开（tmux 版 `bind g` 里关着，因为它每挪一下要 111 毫秒；这里直接读 herdr 的屏幕，
+    缓存 0.5 秒），`p` 的选择记在 `goto.json`。工作区那一层的预览是每个 Claude 一张卡片：状态、名字、多久、开场那句话、最后回了什么。
+  - 本机绑定：dotfiles 的 herdr 配置里 `prefix+g` → `statetrail.goto`，herdr 自带的挪到 `prefix+shift+g`。
+  - 实测：测试标签页里 `jj` / `h` / `l` / `a` / `/agent` / `p` 读屏都对；按 `2` 等 0.6 秒跳到 w1:p9、程序退出；action invoke 后 popup 里的进程在跑，
+    popup 开着时 `tab.focus` + `pane.focus` 照样生效（模拟在浮窗里按 Enter），`popup.close` 后进程退出。**没测**：在真浮窗里用键盘和鼠标。
 
 来自迁移会话留下的交接（`docs/HANDOFF-2026-10-26-herdr.md`，已并进这里、删掉）。本机现在装的就是这个目录：
 `herdr plugin link ~/projects/statetrail/herdr`（10-28 之前是 `herdr-rs`）。link 的目录 `herdr plugin update` 管不到，有新提交要本地
