@@ -33,6 +33,7 @@ pub struct View<'a> {
     pub chapters: &'a [Chapter], // 空 = 不分章，平铺
     pub open: &'a [bool],        // 每一章展没展开
     pub query: &'a str,          // 在搜的字（小写）；空 = 没在搜
+    pub outline: bool,           // 在章那一层：选中的是章名（那一章照样展开给你看），不是轮次
 }
 
 impl View<'_> {
@@ -75,11 +76,13 @@ impl View<'_> {
         self.chapters.iter().position(|c| (c.start..c.end).contains(&i))
     }
 
-    /// 这一项画成选中：选中的那一轮；它所在的章收着时，是那一章的章名
+    /// 这一项画成选中：选中的那一轮；在章那一层、或者它所在的章收着时，是那一章的章名
     pub fn selected(&self, it: Item) -> bool {
         match it {
-            Item::Stop(i) => self.opened == Some(self.stops[i].id.as_str()),
-            Item::Chapter(ci) => self.open.get(ci) != Some(&true) && self.opened_chapter() == Some(ci),
+            Item::Stop(i) => !self.outline && self.opened == Some(self.stops[i].id.as_str()),
+            Item::Chapter(ci) => {
+                (self.outline || self.open.get(ci) != Some(&true)) && self.opened_chapter() == Some(ci)
+            }
             Item::Fold => false,
         }
     }
@@ -248,7 +251,7 @@ fn render_item(v: &View, item: Item, room: usize) -> Vec<Line<'static>> {
             } else {
                 st.reply.clone()
             };
-            let opened = v.opened == Some(st.id.as_str()) && st.kind == "human";
+            let opened = !v.outline && v.opened == Some(st.id.as_str()) && st.kind == "human"; // 章那一层选中的是章名：轮次都不展开原话
             let mut lines = Vec::new();
             if opened {
                 lines.push(Line::from(vec![
@@ -680,6 +683,7 @@ mod tests {
             chapters: &ch,
             open,
             query: "",
+            outline: false,
         };
         let mut term = ratatui::Terminal::new(TestBackend::new(width, 16)).unwrap();
         term.draw(|f| {
@@ -751,10 +755,45 @@ mod tests {
             chapters: &ch,
             open: &[true, true],
             query: "search",
+            outline: false,
         };
         assert!(matches!(v.items()[..], [Item::Chapter(0), Item::Stop(1)]));
         assert!(near(&st[1].prompt, "search", 20).starts_with("…到 Search"));
         assert!(near(&st[1].prompt, "search", 80).starts_with("这一句"));
+    }
+
+    /// 章那一层：选中的那一章照样展开（轮次露出来），但亮的是章名，不是里面的轮次
+    #[test]
+    fn outline_selects_open_chapter() {
+        let mk = |p: &str| Stop {
+            kind: "human",
+            prompt: p.into(),
+            ts: None,
+            id: p.into(),
+            reply: "好".into(),
+            has_text: true,
+            compacted: false,
+        };
+        let owned = [mk("a"), mk("b"), mk("c")];
+        let st: Vec<&Stop> = owned.iter().collect();
+        let ch = [Chapter { start: 0, end: 2, title: "甲".into() }, Chapter { start: 2, end: 3, title: "乙".into() }];
+        let missing = std::collections::HashSet::new();
+        let mut v = View {
+            stops: &st,
+            narrow: true,
+            expanded: false,
+            opened: Some("a"),
+            busy: false,
+            missing: &missing,
+            chapters: &ch,
+            open: &[true, false],
+            query: "",
+            outline: true,
+        };
+        assert!(matches!(v.items()[..], [Item::Chapter(0), Item::Stop(0), Item::Stop(1), Item::Chapter(1)]));
+        assert!(v.selected(Item::Chapter(0)) && !v.selected(Item::Stop(0)));
+        v.outline = false;
+        assert!(!v.selected(Item::Chapter(0)) && v.selected(Item::Stop(0)));
     }
 
     /// 收着的章：最右边写收了几轮，不写第几轮到第几轮

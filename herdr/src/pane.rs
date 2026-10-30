@@ -589,16 +589,9 @@ impl Trail {
         }
     }
 
-    /// 选中的那一轮所在的章是收着的：返回那一章
-    fn shut_chapter(&self) -> Option<usize> {
-        let stops = self.tr.as_ref()?.visible();
-        let i = stops.iter().position(|st| Some(st.id.as_str()) == self.opened.as_deref())?;
-        let ci = self.chaps.iter().position(|c| (c.start..c.end).contains(&i))?;
-        (self.chap_open.get(ci) == Some(&false)).then_some(ci)
-    }
-
     /// 在章和轮两层之间来回（用户 2026-10-29：「像我们之前做 Packer 一样，可以在层级之间来回跳转选择」）。
-    /// ← 收起所有章，只剩章名，选中跳到当前这一轮所在的章；→ / Enter 展开选中的章（别的章照旧收着），选中它的第一轮，章名顶到最上面。
+    /// ← 选中跳到当前这一轮所在的章名，↑↓ 按章挪；选中的那一章照样展开，里面的轮次露出来给你看，别的章收着
+    /// （用户 2026-10-30：「选中的层级还在章节上，但是要把章节里的内容展开显示」）。→ / Enter 进到这一章，选中它的第一轮，章名顶到最上面。
     fn outline(&mut self, up: bool) -> bool {
         if self.chaps.is_empty() || self.outline == up {
             return false;
@@ -607,6 +600,12 @@ impl Trail {
         if up {
             self.reveal = true;
         } else {
+            let Some(tr) = &self.tr else { return false };
+            let stops = tr.visible();
+            let cur = stops.iter().position(|st| Some(st.id.as_str()) == self.opened.as_deref());
+            if let Some(c) = cur.and_then(|i| self.chaps.iter().find(|c| (c.start..c.end).contains(&i))) {
+                self.opened = stops.get(c.start).map(|st| st.id.clone());
+            }
             self.reveal_top = true;
         }
         self.follow = false;
@@ -634,7 +633,7 @@ impl Trail {
             }
             KeyCode::Left | KeyCode::Char('h') => return self.outline(true),
             KeyCode::Right | KeyCode::Char('l') => return self.outline(false),
-            KeyCode::Enter if self.shut_chapter().is_some() => return self.outline(false),
+            KeyCode::Enter if self.outline => return self.outline(false),
             KeyCode::Enter => {
                 let Some(tr) = &self.tr else { return false };
                 let stops = tr.visible();
@@ -1552,7 +1551,7 @@ fn run_loop(
                 .unwrap_or(stops.len().saturating_sub(1));
             let chap_open: Vec<bool> = chaps
                 .iter()
-                .map(|c| !s.outline && (c.start..c.end).contains(&sel) || !query.is_empty())
+                .map(|c| (c.start..c.end).contains(&sel) || !query.is_empty())
                 .collect();
             let view = ui::View {
                 stops: listed,
@@ -1564,6 +1563,7 @@ fn run_loop(
                 chapters: &chaps,
                 open: &chap_open,
                 query: &query,
+                outline: s.outline && !chaps.is_empty(),
             };
             let items = view.items();
             let room = size.width.saturating_sub(2) as usize;
@@ -1608,7 +1608,14 @@ fn run_loop(
                     if k < s.offset {
                         s.offset = if k > 0 && matches!(items[k - 1], Item::Chapter(_)) { k - 1 } else { k };
                     }
-                    while s.offset < bottom && s.offset < k && !ui::fits(&view, &items, s.offset, k, rows, room) {
+                    // 在章那一层选中的是章名：连它展开的轮次一起露出来，放不下就章名顶到最上面
+                    let mut end = k;
+                    if view.outline {
+                        while matches!(items.get(end + 1), Some(Item::Stop(_))) {
+                            end += 1;
+                        }
+                    }
+                    while s.offset < bottom && s.offset < k && !ui::fits(&view, &items, s.offset, end, rows, room) {
                         s.offset += 1;
                     }
                     s.follow = s.offset >= bottom;
@@ -1871,8 +1878,8 @@ fn run_loop(
                             Item::Fold => s.expanded = !s.expanded,
                             Item::Chapter(ci) => {
                                 if let (Some(c), Some(tr)) = (s.chaps.get(ci), &s.tr) {
-                                    // 点展开着的那一章 = 退到章那一层；点收着的章 = 展开它、选中它的第一轮
-                                    if s.chap_open.get(ci) == Some(&true) {
+                                    // 轮那一层点展开着的那一章 = 退到章那一层；点别的章、或者在章那一层点章名 = 进到那一章、选中它的第一轮
+                                    if !s.outline && s.chap_open.get(ci) == Some(&true) {
                                         s.outline = true;
                                         s.reveal = true;
                                     } else {
