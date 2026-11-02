@@ -114,6 +114,10 @@ herdr plugin install siyuanseever/statetrail/herdr
 - **v0.2.1 已发、上市场**（2026-10-29，用户「发布到市场里吧」）：带跟屏幕选中、Haiku 分章（竖线、青色章名、右键改）、滚轮 / 键盘挪选中 + Enter 跳转。
   版本提交 `402361d`（这次 Cargo.toml 也改，`statetrail version` 报 0.2.1）；CI run 40849341192 四个平台 + release 全成功，正式版 8 个文件；
   下载 aarch64-apple-darwin 包，sha256 `0f4a803b…` 与 .sha256 一致、解出来报 0.2.1。main 快进 `93c5083..402361d`，索引 09:30:54Z 显示 0.2.1。
+- **v0.3.0 已发**（2026-11-02，用户「发吧」）：带章那一层 ← / →、同时只展开一章、/ 和 Tab 搜索、`statetrail.goto` 浮窗。
+  版本提交 `18c90ee`；CI run 41416765895 四个平台 + release 全成功，正式版 8 个文件；aarch64-apple-darwin 包 sha256 `322464ed…`
+  与 .sha256 一致、解出来报 0.3.0。main 快进 `402361d..18c90ee`，索引 09:00:33Z 显示 0.3.0。Release 说明补了把 goto 绑到 `prefix+g` 的配置（插件不能自己占键）。
+  发版前的使用情况（GitHub 14 天流量）：0 星 0 fork 0 issue，访问 19 人集中在 10-25 / 26，安装包每个只下了 1～3 次，看不出外部用户。
 
 ## 本机从 tmux 迁到 herdr 之后补的（2026-10-26）
 
