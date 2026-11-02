@@ -115,14 +115,15 @@ description = "statetrail: open, or switch wide / narrow"
 ### Go to a Claude
 
 `statetrail.goto` opens a centered popup that lists every Claude in every workspace, laid out and driven like the
-tmux picker: grouped by workspace, one row each with a number, the state (`⏸ WAIT` needs your answer, `✔ DONE`
+tmux picker. The list holds only the Claudes, with a thin rule between workspaces; the workspaces themselves sit in
+one row along the top, each with an icon for its most urgent Claude. One row per Claude: a number, the state (`⏸ WAIT` needs your answer, `✔ DONE`
 finished and unseen, `▶ RUN` working, `✓ READ` seen), the name, how long it has been in that state, and the
-session's opening ask. Quiet ones (seen, or finished and untouched for two hours) fold into one line per workspace;
-`a` unfolds. The right half is a live view of the selected Claude; `p` hides it (remembered).
+session's opening ask. Quiet ones (seen, or finished and untouched for two hours) fold away, the count written on that
+workspace's rule; `a` unfolds. The right half is a live view of the selected Claude; `p` hides it (remembered).
 
 `j` / `k` move, typing a row number jumps (`1` then `2` is row 12), `Enter` or a click jumps there, `/` searches
-names, opening asks and directories, `h` steps up to the workspaces (the right half becomes one card per Claude in
-that workspace, `Enter` switches to it), `l` steps back, `q` / `Esc` closes. To put it on `prefix+g`, move Herdr's
+names, opening asks and directories, `h` (or `k` on the first row) steps up into the workspace row: `h` / `l` pick one, the right half
+becomes one card per Claude in it, `Enter` or a click switches to it, `j` steps back down; `q` / `Esc` closes. To put it on `prefix+g`, move Herdr's
 own Goto to another key:
 
 ```toml

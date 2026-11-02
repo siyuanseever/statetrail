@@ -257,11 +257,12 @@ fn collect(cache: &mut Cache) -> Vec<Group> {
 
 // ---- 列表 -------------------------------------------------------------------------
 
+/// 列表里只有 Claude；Header 是两个工作区之间那条分隔线（收起几个也写在线上）。
+/// 工作区那一层选中的也记成 Header(gi)，但那时画在顶上那一排。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Row {
     Header(usize),
     Agent(usize, usize),
-    Note(usize),
 }
 
 pub struct List {
@@ -303,11 +304,14 @@ impl List {
             }
             out.push(Row::Header(gi));
             out.extend(shown.into_iter().map(|i| Row::Agent(gi, i)));
-            if !hidden.is_empty() {
-                out.push(Row::Note(gi));
-            }
         }
         out
+    }
+
+    /// 顶上那一排里这个工作区后面跟的图标：最要紧的那个状态（等你、做完没看、在跑），都安静就不画。
+    fn urgent(&self, gi: usize) -> Option<State> {
+        let g = &self.groups[gi];
+        [State::Wait, State::Done, State::Run].into_iter().find(|s| g.agents.iter().any(|a| a.state == *s))
     }
 
     fn agent(&self, r: Row) -> Option<&Agent> {
@@ -381,38 +385,39 @@ pub fn render_row(l: &List, r: Row, width: usize) -> Line<'static> {
     let grey = Style::default().fg(c.grey);
     match r {
         Row::Header(gi) => {
+            // ── zumi ──────────── ⋯ 收起 7 个(7 已读) · a 展开 ──
             let g = &l.groups[gi];
-            let mut spans = vec![Span::styled(
-                format!("▾ {} {}", g.num, g.label),
-                Style::default().fg(c.cyan).add_modifier(Modifier::BOLD),
-            )];
-            let count = |s: State| g.agents.iter().filter(|a| a.state == s).count();
-            for s in [State::Wait, State::Done, State::Run, State::Read, State::Stale] {
-                let n = count(s);
-                if n > 0 {
-                    let (b, st) = badge(s);
-                    let icon = b.split(' ').next().unwrap_or("");
-                    spans.push(Span::raw("  "));
-                    spans.push(Span::styled(format!("{icon} {n}"), st));
+            let rule = Style::default().fg(c.dim);
+            let hidden = l.hidden(gi);
+            let note = if hidden.is_empty() {
+                String::new()
+            } else {
+                let read = hidden.iter().filter(|&&i| g.agents[i].state == State::Read).count();
+                let mut kinds = Vec::new();
+                if read > 0 {
+                    kinds.push(t("{n} 已读").replace("{n}", &read.to_string()));
                 }
+                if hidden.len() > read {
+                    kinds.push(t("{n} 搁置").replace("{n}", &(hidden.len() - read).to_string()));
+                }
+                let n = t("⋯ 收起 {n} 个({kinds}) · a 展开")
+                    .replace("{n}", &hidden.len().to_string())
+                    .replace("{kinds}", &kinds.join(" · "));
+                format!(" {n} ")
+            };
+            let label = clip(&format!(" {} ", g.label), width.saturating_sub(4 + note.width()), true);
+            let tail = if note.is_empty() { 0 } else { note.width() + 2 };
+            let fill = width.saturating_sub(2 + label.width() + tail);
+            let mut spans = vec![
+                Span::styled("──", rule),
+                Span::styled(label, Style::default().fg(c.cyan)),
+                Span::styled("─".repeat(fill), rule),
+            ];
+            if !note.is_empty() {
+                spans.push(Span::styled(note, grey));
+                spans.push(Span::styled("──", rule));
             }
             Line::from(spans)
-        }
-        Row::Note(gi) => {
-            let g = &l.groups[gi];
-            let hidden = l.hidden(gi);
-            let read = hidden.iter().filter(|&&i| g.agents[i].state == State::Read).count();
-            let mut kinds = Vec::new();
-            if read > 0 {
-                kinds.push(t("{n} 已读").replace("{n}", &read.to_string()));
-            }
-            if hidden.len() > read {
-                kinds.push(t("{n} 搁置").replace("{n}", &(hidden.len() - read).to_string()));
-            }
-            let note = t("⋯ 收起 {n} 个({kinds}) · a 展开")
-                .replace("{n}", &hidden.len().to_string())
-                .replace("{kinds}", &kinds.join(" · "));
-            Line::from(Span::styled(clip(&format!("      {note}"), width, true), grey))
         }
         Row::Agent(..) => {
             let Some(a) = l.agent(r) else { return Line::default() };
@@ -592,6 +597,7 @@ enum Chip {
 enum Hit {
     Row(Row),
     Chip(Chip),
+    Space(usize),
 }
 
 struct Popup {
@@ -619,17 +625,15 @@ fn pref_path() -> PathBuf {
 
 impl Popup {
     fn stops(&self) -> Vec<Row> {
-        self.list
-            .rows()
-            .into_iter()
-            .filter(|r| {
-                if self.ws_mode {
-                    matches!(r, Row::Header(_))
-                } else {
-                    matches!(r, Row::Agent(..))
-                }
-            })
-            .collect()
+        if self.ws_mode {
+            // 顶上那一排：每个有 Claude 的工作区都在，不管搜索和收起
+            return (0..self.list.groups.len()).map(Row::Header).collect();
+        }
+        self.list.rows().into_iter().filter(|r| matches!(r, Row::Agent(..))).collect()
+    }
+
+    fn at_first(&self) -> bool {
+        self.stops().first().is_some_and(|&r| self.is_sel(r))
     }
 
     fn is_sel(&self, r: Row) -> bool {
@@ -644,7 +648,6 @@ impl Popup {
         match r {
             Row::Header(gi) => self.sel_ws = Some(self.list.groups[gi].ws.clone()),
             Row::Agent(..) => self.sel_pane = self.list.agent(r).map(|a| a.pane.clone()),
-            Row::Note(_) => {}
         }
     }
 
@@ -680,7 +683,12 @@ impl Popup {
             let cur = self.fix_sel().and_then(|r| self.list.agent(r)).map(|a| a.ws.clone());
             self.sel_ws = cur.or_else(|| self.list.groups.first().map(|g| g.ws.clone()));
         } else if let Some(gi) = self.list.groups.iter().position(|g| Some(&g.ws) == self.sel_ws.as_ref()) {
-            let first = self.list.rows().into_iter().find(|r| matches!(r, Row::Agent(g, _) if *g == gi));
+            let first_in = |l: &List| l.rows().into_iter().find(|r| matches!(r, Row::Agent(g, _) if *g == gi));
+            if first_in(&self.list).is_none() && self.list.query.is_none() {
+                // 这个工作区的全收起来了：展开，不然回到列表看不到它们
+                self.list.show_all = true;
+            }
+            let first = first_in(&self.list);
             if let Some(r) = first {
                 self.select(r);
             }
@@ -712,6 +720,7 @@ impl Popup {
                 self.save_pref();
             }
             Chip::Search => {
+                self.set_level(false);
                 if self.list.query.is_none() {
                     self.list.query = Some(String::new());
                 }
@@ -734,7 +743,7 @@ impl Popup {
             (t("✕ 关闭"), Chip::Close),
             (t("j/k 选"), Chip::Plain),
             (t("数字直跳"), Chip::Plain),
-            (if self.ws_mode { t("l 回到列表") } else { t("h 工作区") }, Chip::Level),
+            (if self.ws_mode { t("j 回到列表") } else { t("h 工作区") }, Chip::Level),
             (if self.list.show_all { t("a 收起") } else { t("a 全部") }, Chip::All),
             (t("p 预览"), Chip::Preview),
             (t("/ 搜索"), Chip::Search),
@@ -760,7 +769,9 @@ impl Popup {
             crate::ui::mark(f, 0, x0, x1, false);
         }
 
-        let mut top = 1u16;
+        let cur = self.fix_sel();
+        self.draw_spaces(f, 1, lw, cur);
+        let mut top = 2u16;
         if let Some(q) = &self.list.query {
             let line = Line::from(vec![
                 Span::styled("  / ", Style::default().fg(c.accent)),
@@ -768,13 +779,12 @@ impl Popup {
                 Span::styled("▏", Style::default().fg(c.accent)),
                 Span::styled(format!("   {}", t("Esc 清掉搜索")), grey),
             ]);
-            f.render_widget(Paragraph::new(line), Rect::new(0, 1, lw, 1));
-            top = 2;
+            f.render_widget(Paragraph::new(line), Rect::new(0, top, lw, 1));
+            top += 1;
         }
 
-        // 列表
+        // 列表：只有 Claude，工作区之间一条分隔线
         let rows = self.list.rows();
-        let cur = self.fix_sel();
         let room = area.height.saturating_sub(top) as usize;
         if let Some(i) = cur.and_then(|r| rows.iter().position(|&x| x == r)) {
             // 选中的是一组的第一个时把组名也露出来
@@ -805,7 +815,7 @@ impl Popup {
         for (k, &r) in rows.iter().skip(self.offset).take(room).enumerate() {
             let y = top + k as u16;
             let mut line = render_row(&self.list, r, lw.saturating_sub(3) as usize);
-            let on = self.is_sel(r);
+            let on = matches!(r, Row::Agent(..)) && self.is_sel(r);
             line.spans
                 .insert(0, Span::styled(if on { "▌ " } else { "  " }, Style::default().fg(c.accent)));
             if on {
@@ -822,6 +832,67 @@ impl Popup {
             let sep: Vec<Line> = (0..ph).map(|_| Line::from(Span::styled("│", Style::default().fg(c.dim)))).collect();
             f.render_widget(Paragraph::new(sep), Rect::new(lw, 0, 1, ph));
             self.draw_preview(f, Rect::new(px + 1, 0, pw.saturating_sub(1), ph), cur);
+        }
+    }
+
+    /// 顶上一排工作区：「 1 projects ▶  2 OS  3 zumi ✔ 」。选中的 Claude 在哪个工作区就把哪个点亮；
+    /// 工作区那一层时选中的垫底色。放不下就往后挪，让选中的露出来。
+    fn draw_spaces(&mut self, f: &mut ratatui::Frame, y: u16, lw: u16, cur: Option<Row>) {
+        let c = colors();
+        let grey = Style::default().fg(c.grey);
+        let here = match cur {
+            Some(Row::Header(gi)) => Some(gi),
+            Some(r) => self.list.agent(r).and_then(|a| self.list.groups.iter().position(|g| g.ws == a.ws)),
+            None => None,
+        };
+        let items: Vec<(usize, Vec<Span<'static>>)> = (0..self.list.groups.len())
+            .map(|gi| {
+                let g = &self.list.groups[gi];
+                let lit = here == Some(gi);
+                let label_st = if lit {
+                    Style::default().fg(c.accent).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                let mut spans = vec![
+                    Span::raw(" "),
+                    Span::styled(format!("{} ", g.num), if lit { label_st } else { grey }),
+                    Span::styled(clip(&g.label, 16, true), label_st),
+                ];
+                if let Some(s) = self.list.urgent(gi) {
+                    let (b, st) = badge(s);
+                    spans.push(Span::styled(format!(" {}", b.split(' ').next().unwrap_or("")), st));
+                }
+                spans.push(Span::raw(" "));
+                (gi, spans)
+            })
+            .collect();
+        let w = |s: &[Span]| s.iter().map(|x| x.content.width()).sum::<usize>() as u16;
+        let avail = lw.saturating_sub(2);
+        let mut start = 0;
+        if let Some(h) = here {
+            while start < h && items[start..=h].iter().map(|(_, s)| w(s) + 1).sum::<u16>() > avail {
+                start += 1;
+            }
+        }
+        let bg = c.selection.map_or_else(Style::default, |b| Style::default().bg(b));
+        let mut x = 1u16;
+        if start > 0 {
+            f.render_widget(Paragraph::new(Span::styled("‹", grey)), Rect::new(0, y, 1, 1));
+        }
+        for (gi, spans) in items.into_iter().skip(start) {
+            let iw = w(&spans);
+            if x + iw > lw.saturating_sub(1) {
+                f.render_widget(Paragraph::new(Span::styled("›", grey)), Rect::new(lw.saturating_sub(2), y, 1, 1));
+                break;
+            }
+            let mut line = Line::from(spans);
+            if self.ws_mode && here == Some(gi) {
+                line = line.style(bg);
+            }
+            f.render_widget(Paragraph::new(line), Rect::new(x, y, iw, 1));
+            self.hits.push((y, x, x + iw, Hit::Space(gi)));
+            x += iw + 1;
         }
     }
 
@@ -911,6 +982,14 @@ impl Popup {
         match k.code {
             KeyCode::Esc | KeyCode::Char('q') => return Some(None),
             KeyCode::Enter => return Some(self.chosen()),
+            // 工作区那一排：← → 挑，↓ 回到列表
+            KeyCode::Left | KeyCode::Char('h') if self.ws_mode => self.move_sel(-1),
+            KeyCode::Right | KeyCode::Char('l') if self.ws_mode => self.move_sel(1),
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab if self.ws_mode => self.set_level(false),
+            KeyCode::Up | KeyCode::Char('k') if self.ws_mode => {}
+            // 列表：h 或在第一个上再往上，进工作区那一排
+            KeyCode::Left | KeyCode::Char('h') => self.set_level(true),
+            KeyCode::Up | KeyCode::Char('k') if self.at_first() => self.set_level(true),
             KeyCode::Up | KeyCode::Char('k') => self.move_sel(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_sel(1),
             KeyCode::Char('p') if ctrl => self.move_sel(-1),
@@ -919,8 +998,6 @@ impl Popup {
             KeyCode::PageDown => self.move_sel(10),
             KeyCode::Home | KeyCode::Char('g') => self.move_sel(-10_000),
             KeyCode::End | KeyCode::Char('G') => self.move_sel(10_000),
-            KeyCode::Left | KeyCode::Char('h') => self.set_level(true),
-            KeyCode::Right | KeyCode::Char('l') => self.set_level(false),
             KeyCode::Char('a') => return self.chip(Chip::All),
             KeyCode::Char('p') => return self.chip(Chip::Preview),
             KeyCode::Char('/') => return self.chip(Chip::Search),
@@ -954,14 +1031,16 @@ impl Popup {
                     .find(|(y, x0, x1, _)| *y == m.row && m.column >= *x0 && m.column < *x1);
                 match hit.map(|h| &h.3) {
                     Some(Hit::Chip(c)) => return self.chip(*c),
-                    Some(Hit::Row(Row::Note(_))) => self.list.show_all = true,
+                    Some(Hit::Space(gi)) => return Some(Some(Go::Ws(self.list.groups[*gi].ws.clone()))),
+                    // 分隔线上写着收起了几个：点它展开
+                    Some(Hit::Row(Row::Header(gi))) => {
+                        if !self.list.hidden(*gi).is_empty() {
+                            self.list.show_all = true;
+                        }
+                    }
                     Some(Hit::Row(r)) => {
                         let r = *r;
-                        if matches!(r, Row::Header(_)) {
-                            self.ws_mode = true;
-                        } else {
-                            self.ws_mode = false;
-                        }
+                        self.ws_mode = false;
                         self.select(r);
                         return Some(self.chosen());
                     }
@@ -1148,11 +1227,14 @@ mod tests {
     }
 
     #[test]
-    fn quiet_ones_fold_under_a_note() {
+    fn quiet_ones_fold_into_the_divider() {
         let l = list();
-        assert_eq!(l.rows(), vec![Row::Header(0), Row::Agent(0, 0), Row::Agent(0, 2), Row::Note(0)]);
-        let note: String = render_row(&l, Row::Note(0), 80).spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(note.contains(&t("{n} 已读").replace("{n}", "1")), "{note}");
+        assert_eq!(l.rows(), vec![Row::Header(0), Row::Agent(0, 0), Row::Agent(0, 2)]);
+        // 收起几个写在分隔线上，不另占一行；线画满整行
+        let line: String = render_row(&l, Row::Header(0), 80).spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(line.starts_with("── work ─"), "{line}");
+        assert!(line.contains(&t("{n} 已读").replace("{n}", "1")), "{line}");
+        assert_eq!(line.width(), 80, "{line}");
     }
 
     #[test]

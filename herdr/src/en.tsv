@@ -123,7 +123,7 @@ Tab 搜全部会话	Tab: all sessions
 ✕ 关闭	✕ close
 j/k 选	j/k move
 数字直跳	number jumps
-l 回到列表	l back to list
+j 回到列表	j back to list
 h 工作区	h workspaces
 a 收起	a fold
 a 全部	a all

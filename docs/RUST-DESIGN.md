@@ -211,6 +211,10 @@ herdr plugin install siyuanseever/statetrail/herdr
   - 收起、行号直跳（再按一位不可能有这个号就马上跳，不然等 0.6 秒）、`h` / `l` 两层、`/` 搜索、`a`、`p`、点提示栏的词都照 tmux 版。
     没搬的：`o` 总览、`t` token 页、`ctrl-x` 归档、编队、底部额度。预览默认开（tmux 版 `bind g` 里关着，因为它每挪一下要 111 毫秒；这里直接读 herdr 的屏幕，
     缓存 0.5 秒），`p` 的选择记在 `goto.json`。工作区那一层的预览是每个 Claude 一张卡片：状态、名字、多久、开场那句话、最后回了什么。
+  - 2026-11-02 改版（用户「它有两列，看起来有点混乱……把 Agents 单独全拉出来，中间按照 Spaces 来做一个分隔线就足够了，Spaces 再另外放到一个地方」，
+    照 herdr 侧边栏 Spaces / Agents 分开放）：组头「▾ 1 projects ▶1 ✓1」和「⋯ 收起 N 个」那行都去掉，换成一条细分隔线 `── zumi ──── ⋯ 收起 4 个 ──`；
+    工作区挪到提示栏下面单独一排（编号、名字、最要紧的状态图标，选中的 Claude 所在的那个点亮）。`h` 或在第一个 Claude 上按 `k` 进这一排，
+    `h` / `l` 挑、`j` 回列表、`Enter` 或点一下切工作区；回列表时那个工作区的全收着就自动展开。点分隔线展开收起的。
   - 本机绑定：dotfiles 的 herdr 配置里 `prefix+g` → `statetrail.goto`，herdr 自带的挪到 `prefix+shift+g`。
   - 实测：测试标签页里 `jj` / `h` / `l` / `a` / `/agent` / `p` 读屏都对；按 `2` 等 0.6 秒跳到 w1:p9、程序退出；action invoke 后 popup 里的进程在跑，
     popup 开着时 `tab.focus` + `pane.focus` 照样生效（模拟在浮窗里按 Enter），`popup.close` 后进程退出。**没测**：在真浮窗里用键盘和鼠标。
