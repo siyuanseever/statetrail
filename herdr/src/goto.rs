@@ -211,7 +211,7 @@ fn collect(cache: &mut Cache) -> Vec<Group> {
             "working" => info.last_ts.unwrap_or(info.mtime),
             _ => info.mtime,
         };
-        let age = if since > 0 { (now - since).max(0) } else { 0 };
+        let age = if since > 0 { (now - since).max(0) } else { -1 }; // -1：找不到对话记录，不知道多久
         let state = match status.as_str() {
             "blocked" => State::Wait,
             "working" => State::Run,
@@ -344,6 +344,9 @@ fn dur(s: i64) -> String {
 
 /// 时间说的是这个状态的意思：RUN 跑了多久，WAIT 等了多久，DONE 做完多久了，READ 上次做完是多久以前。
 fn age_text(state: State, secs: i64) -> String {
+    if secs < 0 {
+        return String::new();
+    }
     let d = dur(secs);
     match state {
         State::Run => t("已运行 {d}").replace("{d}", &d),
@@ -1268,6 +1271,13 @@ mod tests {
             s.contains(&t("等确认 {d}").replace("{d}", &t("{n}分钟").replace("{n}", "1"))),
             "{s}"
         );
+    }
+
+    #[test]
+    fn unknown_age_is_blank() {
+        // 没有对话记录（herdr 没报会话 id）时不写「0 秒前」
+        assert_eq!(age_text(State::Done, -1), "");
+        assert!(!age_text(State::Done, 0).is_empty());
     }
 
     #[test]
