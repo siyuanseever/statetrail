@@ -118,6 +118,14 @@ herdr plugin install siyuanseever/statetrail/herdr
   版本提交 `18c90ee`；CI run 41416765895 四个平台 + release 全成功，正式版 8 个文件；aarch64-apple-darwin 包 sha256 `322464ed…`
   与 .sha256 一致、解出来报 0.3.0。main 快进 `402361d..18c90ee`，索引 09:00:33Z 显示 0.3.0。Release 说明补了把 goto 绑到 `prefix+g` 的配置（插件不能自己占键）。
   发版前的使用情况（GitHub 14 天流量）：0 星 0 fork 0 issue，访问 19 人集中在 10-25 / 26，安装包每个只下了 1～3 次，看不出外部用户。
+- **v0.3.1 已发 + 第一次推广**（2026-11-02 18:1x，用户「现在发吧，没关系的，两个帖子都发吧」）：跳转浮窗改版（只列 Claude、工作区之间分隔线、工作区单独一排）、
+  找不到对话记录不写「多久」、README 换成三张截图（宽版第一、窄版、浮窗；`herdr/demo/shots.py` 在隔离 herdr 里用假会话生成）。
+  版本提交 `98dfc11`；CI run 41427294679 成功，正式版 8 个文件，aarch64-apple-darwin 包 sha256 `573ff7c0…` 与 .sha256 一致、解出来报 0.3.1；main 快进 `18c90ee..98dfc11`。
+  打标签被 Claude Code 自动权限拦了（「创建公开的东西」），发版和发帖由用户在会话里 `! bash release-and-post.sh` 亲手跑。
+  - 为什么推广：14 天只有 19 个访客、没有任何外链来源，市场 1945 个插件里中位数 1 星——问题是没人看到，不是功能。
+  - 帖子：herdr 讨论区 Show and tell https://github.com/herdrdev/herdr/discussions/5758 ；在额度需求帖 #5717 回了一条
+    https://github.com/herdrdev/herdr/discussions/5717#discussioncomment-19348126 。herdr 还有 Discord（discord.gg/PsgRfzmUDg），要用户自己发。
+  - 回头看效果：GitHub traffic 的 views / referrers（14 天窗口）、星标、讨论区回复。
 
 ## 本机从 tmux 迁到 herdr 之后补的（2026-10-26）
 
