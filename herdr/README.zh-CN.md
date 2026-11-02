@@ -7,7 +7,13 @@
 
 [English](README.md)
 
-![statetrail 在 herdr 里：打开、点一轮跳转、拉窄、拉宽、点 Git 按钮](docs/demo.gif)
+![宽版轨迹：右边按章分组，选中第 3 轮，Claude 滚到了那一轮](docs/wide.png)
+
+| 窄版轨迹 | 跳到任意一个 Claude（`statetrail.goto`） |
+|---|---|
+| ![贴在 Claude 旁边的窄版轨迹](docs/narrow.png) | ![浮窗：按工作区列出所有 Claude，带状态和实时画面](docs/goto.png) |
+
+截图由 `demo/shots.py` 生成：隔离的 herdr 里跑真插件，Claude 和会话都是编的。
 
 claude-code-history-viewer、claude-code-transcripts 这类工具是事后翻看会话的。
 statetrail 管的是你正在用的这个会话：贴在运行中的 Claude 旁边，跟着它走。

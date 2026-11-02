@@ -17,7 +17,11 @@ Using tmux instead? The trail started as part of
 [claude-tmux-sessions](https://github.com/siyuanseever/claude-tmux-sessions), a tmux setup for running many Claude
 Code sessions; its sidebar is the tmux version of the same idea.
 
-![statetrail in herdr](herdr/docs/demo.gif)
+![Wide trail: chapters on the right, turn 3 selected, Claude scrolled to it](herdr/docs/wide.png)
+
+| Narrow trail | Go to any Claude (`statetrail.goto`) |
+|---|---|
+| ![Narrow trail beside Claude](herdr/docs/narrow.png) | ![Popup listing every Claude by workspace, with state and live preview](herdr/docs/goto.png) |
 
 ## What every version shows
 

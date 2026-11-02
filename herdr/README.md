@@ -8,7 +8,13 @@ On top: the model, the account, and context / 5-hour / 7-day quota bars.
 
 [中文说明](README.zh-CN.md)
 
-![statetrail in herdr: open, click a turn, narrow, wide, Git button](docs/demo.gif)
+![Wide trail: chapters on the right, turn 3 selected, Claude scrolled to it](docs/wide.png)
+
+| Narrow trail | Go to any Claude (`statetrail.goto`) |
+|---|---|
+| ![Narrow trail beside Claude](docs/narrow.png) | ![Popup listing every Claude by workspace, with state and live preview](docs/goto.png) |
+
+The screenshots come from `demo/shots.py`: the real plugin in an isolated herdr, with a fake Claude and made-up sessions.
 
 Tools like claude-code-history-viewer or claude-code-transcripts let you browse sessions after the fact.
 statetrail is for the session you are in: it stays beside the live Claude and follows it as it works.
