@@ -99,6 +99,7 @@ struct Trail {
     cfg: Config,
     sid: Option<String>,
     cfg_dir: PathBuf,
+    cfg_pid: Option<u32>, // cfg_dir 是按哪个 Claude 进程认的
     tr: Option<Transcript>,
     status: Option<String>,
     opened: Option<String>,
@@ -211,7 +212,7 @@ impl Trail {
         if info["agent"].as_str() == Some("claude") {
             if self.no_claude_since.take().is_some() && self.sid.is_some() {
                 // Claude 退出又起来了（比如换账号 --resume 同一个会话）：会话 id 可能没变，配置目录要重认
-                self.cfg_dir = claude::config_dir_of_pid(herdr::claude_pid(&self.target));
+                self.rescan();
             }
         } else if self.no_claude_since.is_none() {
             self.no_claude_since = Some(Instant::now());
@@ -239,7 +240,7 @@ impl Trail {
                 }
             }
             if self.sid.is_some() {
-                self.cfg_dir = claude::config_dir_of_pid(herdr::claude_pid(&self.target));
+                self.rescan();
             }
         }
         if let (Some(sid), None) = (&self.sid, &self.tr)
@@ -251,6 +252,22 @@ impl Trail {
             tr.update();
         }
         true
+    }
+
+    /// 按 Claude 进程重认配置目录（账号、额度跟着变）。
+    fn rescan(&mut self) {
+        let pid = herdr::claude_pid(&self.target);
+        self.cfg_dir = claude::config_dir_of_pid(pid);
+        self.cfg_pid = pid;
+    }
+
+    /// 补查配置目录认得对不对：认的那个进程的会话文件不在认的目录里了（Claude 退出时会删掉它），就重认。
+    /// 换账号后的 rescan 没到、或 Claude 刚起来会话文件还没写就先按默认账号认了，都靠这一步纠回来
+    /// （2026-11-03 一次切 9 个窗格，有 2 个轨迹一直显示旧账号）。平时只看一个文件在不在，不问 herdr。
+    fn recheck_cfg(&mut self) {
+        if !self.cfg_pid.is_some_and(|p| self.cfg_dir.join("sessions").join(format!("{p}.json")).exists()) {
+            self.rescan();
+        }
     }
 
     fn model_ctx(&mut self) -> (String, String) {
@@ -290,6 +307,7 @@ impl Trail {
     fn act(&mut self, act: &str, width: u16, tx: &Sender<Msg>) {
         match act {
             "usage" => {
+                self.rescan(); // ⟳ 也重认账号
                 self.kick_usage(true, tx);
                 self.plugins = tools::load_plugins(&self.cfg); // 刚装 / 刚卸的插件，点一下 ⟳ 底部就跟上
             }
@@ -1388,6 +1406,7 @@ pub fn run(cfg: Config) {
         cfg,
         sid: None,
         cfg_dir: claude::default_cfg(),
+        cfg_pid: None,
         tr: None,
         status: None,
         opened: None,
@@ -1948,9 +1967,7 @@ fn run_loop(
                     // statetrail switch 换完账号：会话 id 没变，按新进程重认配置目录（账号、额度跟着变）
                     // 别的轨迹的跨会话搜索选中了这个会话的一轮
                     ["goto", id] => s.goto = Some(((*id).to_owned(), Instant::now())),
-                    ["rescan"] => {
-                        s.cfg_dir = claude::config_dir_of_pid(herdr::claude_pid(&s.target));
-                    }
+                    ["rescan"] => s.rescan(),
                     _ => {}
                 }
             }
@@ -2018,6 +2035,9 @@ fn run_loop(
             // 会话 id 后报上来（report-agent-session）、对话记录文件后出现时状态都不变，没有事件：没找到就隔一会儿再查
             if s.tr.is_none() {
                 stale = true;
+            }
+            if s.sid.is_some() {
+                s.recheck_cfg();
             }
             if s.plugins_changed() {
                 s.plugins = tools::load_plugins(&s.cfg); // 装了 / 卸了别的 herdr 插件：底部的插件按钮跟上
