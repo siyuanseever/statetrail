@@ -138,6 +138,26 @@ fn type_line(pane: &str, text: &str) {
     keys(pane, &["enter"]);
 }
 
+/// 按了 ← 进的会话列表（「Your conversation moved to the background — enter opens it · esc returns to it」）。
+/// 这时输入框是「describe a task for a new session」，打进去的字会变成新开一个后台会话的任务，不是发给这个会话。
+fn in_agents_view(lines: &[String]) -> bool {
+    let tail = lines[lines.len().saturating_sub(3)..].join("\n");
+    tail.contains("enter to return") || tail.contains("describe a task for a new session")
+}
+
+/// 停在会话列表里就按 esc 回到原对话（一次一下、每下都重读：在对话里连按两下 esc 会打开回退菜单）。
+/// 回不去返回 false。
+fn leave_agents_view(pane: &str) -> bool {
+    for _ in 0..3 {
+        if !in_agents_view(&read(pane, false)) {
+            return true;
+        }
+        keys(pane, &["esc"]);
+        std::thread::sleep(Duration::from_millis(600));
+    }
+    !in_agents_view(&read(pane, false))
+}
+
 /// 特征串照 Claude Code 现在的界面写，界面改了就会认不出（落到「空闲」，于是更保守的输入框检查还会兜一道）。
 fn screen_state(lines: &[String]) -> &'static str {
     let text = lines.join("\n");
@@ -460,6 +480,12 @@ pub fn switch_one(pane: &str, to: &Account, accts: &[Account], o: &Opts, log: &d
     if std::env::var("HERDR_PANE_ID").as_deref() == Ok(pane) {
         return skip("这是当前正在用的窗格");
     }
+    if let Some(job) = session_file(pid, &src).and_then(|v| v["parkedJobId"].as_str().map(str::to_owned)) {
+        return switch_parked(pane, pid, &argv, &job, &src, to, accts, o, log);
+    }
+    if !o.dry && !leave_agents_view(pane) {
+        return skip("停在按 ← 进的会话列表里，按 esc 没回到对话，没动");
+    }
     let lines = read(pane, false);
     if busy(pane) || screen_state(&lines) != "idle" {
         return skip("正在工作或等你确认，没动");
@@ -510,21 +536,7 @@ pub fn switch_one(pane: &str, to: &Account, accts: &[Account], o: &Opts, log: &d
         }
         return switch_one(pane, to, accts, o, log, true);
     }
-    // 用 env 写法，不用 shell 函数（比如 claude2）：不是每个窗格的 shell 里都定义了它。别的账号设过的变量先 -u 掉。
-    let mut unset: Vec<&str> = accts.iter().flat_map(|a| a.env.iter().map(|(k, _)| k.as_str())).collect();
-    unset.push("CLAUDE_CONFIG_DIR");
-    unset.sort();
-    unset.dedup();
-    let mut line = String::from("env");
-    for k in unset {
-        line += &format!(" -u {k}");
-    }
-    if to.dir != crate::claude::default_cfg() {
-        line += &format!(" CLAUDE_CONFIG_DIR={}", quote(&to.dir.to_string_lossy()));
-    }
-    for (k, v) in &to.env {
-        line += &format!(" {k}={}", quote(v));
-    }
+    let mut line = env_prefix(&to.dir, &to.env, accts);
     line += " claude";
     for a in relaunch_args(&argv, &sid) {
         line += &format!(" {}", quote(&a));
@@ -556,12 +568,36 @@ pub fn switch_one(pane: &str, to: &Account, accts: &[Account], o: &Opts, log: &d
     }
     std::thread::sleep(Duration::from_millis(300));
     type_line(pane, &line);
-    // 等新进程的会话文件出现在目标账号目录里，且会话 id 没变，才算切成功
+    finish(pane, pid, &sid, to, &line, had_bg, &bg)
+}
+
+/// `env -u …[ CLAUDE_CONFIG_DIR=…][ K=V…]`：起某个账号的 claude 前的环境。用 env 写法，不用 shell 函数（比如 claude2）：
+/// 不是每个窗格的 shell 里都定义了它。别的账号设过的变量先 -u 掉。
+fn env_prefix(dir: &std::path::Path, env: &[(String, String)], accts: &[Account]) -> String {
+    let mut unset: Vec<&str> = accts.iter().flat_map(|a| a.env.iter().map(|(k, _)| k.as_str())).collect();
+    unset.push("CLAUDE_CONFIG_DIR");
+    unset.sort();
+    unset.dedup();
+    let mut line = String::from("env");
+    for k in unset {
+        line += &format!(" -u {k}");
+    }
+    if dir != crate::claude::default_cfg() {
+        line += &format!(" CLAUDE_CONFIG_DIR={}", quote(&dir.to_string_lossy()));
+    }
+    for (k, v) in env {
+        line += &format!(" {k}={}", quote(v));
+    }
+    line
+}
+
+/// 敲完新命令以后：等新进程的会话文件出现在目标账号目录里，且会话 id 没变，才算切成功；停过后台任务的再告诉它一声。
+fn finish(pane: &str, pid: u32, sid: &str, to: &Account, line: &str, had_bg: bool, bg: &[String]) -> Outcome {
     for _ in 0..60 {
         std::thread::sleep(Duration::from_millis(500));
         if let Some(np) = herdr::claude_pid(pane)
             && np != pid
-            && session_file(np, &to.dir).is_some_and(|v| v["sessionId"].as_str() == Some(&sid))
+            && session_file(np, &to.dir).is_some_and(|v| v["sessionId"].as_str() == Some(sid))
         {
             // 旁边的轨迹按进程认账号，会话 id 没变它不会自己重查：叫它一声
             for (sb, tg) in crate::sidebars() {
@@ -574,8 +610,7 @@ pub fn switch_one(pane: &str, to: &Account, accts: &[Account], o: &Opts, log: &d
                 return (State::Ok, done);
             }
             // 后台任务是调用方确认过才停的：告诉新进程停了哪些，它自己判断重挂哪些（它不知道，会一直等那些任务的结果）
-            log(t("{pane} 告诉它重挂后台任务").replace("{pane}", pane));
-            let note = if tell_bg_stopped(pane, &sid, &to.name, &bg) {
+            let note = if tell_bg_stopped(pane, sid, &to.name, bg) {
                 t("已告诉它重挂停掉的后台任务")
             } else {
                 t("停掉的后台任务没能告诉它，请自己提醒它重挂")
@@ -585,9 +620,128 @@ pub fn switch_one(pane: &str, to: &Account, accts: &[Account], o: &Opts, log: &d
     }
     fail(
         t("已执行 {what}，但 30 秒内没看到它在 {to} 下起来，请看一眼窗格")
-            .replace("{what}", &line)
+            .replace("{what}", line)
             .replace("{to}", &to.name),
     )
+}
+
+/// 按过 ← 的会话：对话被交给 Claude Code 的后台服务跑了（窗格里的进程只剩个空壳，会话文件里记着 parkedJobId），
+/// 在里面 /exit 只会退回会话列表，壳自己的会话 id 也是个空会话。所以换个走法：
+/// 退回列表 → ctrl+c 两下退出壳 → 在 shell 里 `claude stop <后台 id>`（对话保留）→ 用新账号 --resume 那个后台会话的 id。
+fn parked_session(dir: &std::path::Path, job: &str) -> Option<(u32, String, String)> {
+    std::fs::read_dir(dir.join("sessions")).ok()?.flatten().find_map(|e| {
+        let v: Value = serde_json::from_slice(&std::fs::read(e.path()).ok()?).ok()?;
+        let sid = v["sessionId"].as_str()?;
+        (v["kind"].as_str() == Some("bg") && sid.starts_with(job)).then(|| {
+            (
+                v["pid"].as_u64().unwrap_or(0) as u32,
+                sid.to_owned(),
+                v["status"].as_str().unwrap_or("").to_owned(),
+            )
+        })
+    })
+}
+
+/// 这个会话的记录里有没有真的对话（用户说过话）。
+fn has_turns(sid: &str, dir: &std::path::Path) -> bool {
+    crate::claude::transcript_path(sid, dir)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .is_some_and(|txt| txt.lines().any(|l| l.starts_with("{\"type\":\"user\"") || l.contains("\"type\":\"user\",")))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn switch_parked(
+    pane: &str,
+    pid: u32,
+    argv: &[String],
+    job: &str,
+    src: &std::path::Path,
+    to: &Account,
+    accts: &[Account],
+    o: &Opts,
+    log: &dyn Fn(String),
+) -> Outcome {
+    let Some((bg_pid, bg_sid, status)) = parked_session(src, job) else {
+        return skip("它按 ← 移到后台过，但没找到那个后台会话，没动");
+    };
+    // 移到后台后还聊过，后台会话自己的记录里就有整段对话（连同之前的），接它；没聊过，它的记录里只有标题，
+    // 对话还在原来那个会话里（末尾一条 continued-in 指过去），--resume 后台 id 会报「No conversation found」，接原来的
+    let sid = if has_turns(&bg_sid, src) {
+        bg_sid
+    } else {
+        match session_file(pid, src).and_then(|v| v["sessionId"].as_str().map(str::to_owned)) {
+            Some(s) if has_turns(&s, src) => s,
+            _ => return skip("它按 ← 移到后台过，但没找到那个后台会话，没动"),
+        }
+    };
+    if status != "idle" {
+        return skip("正在工作或等你确认，没动");
+    }
+    let bg = bg_commands(bg_pid);
+    if !o.stop_bg && !bg.is_empty() {
+        return skip("它挂着后台任务/定时任务，切换会把它们停掉，没动");
+    }
+    let lines = read(pane, false);
+    if in_agents_view(&lines) {
+        // 列表底下那个输入框是「开个新会话」用的：里面只能是占位字，有别的字就是你写了一半
+        let d = draft_text(&lines, &read(pane, true)).unwrap_or_default();
+        if !d.is_empty() && d != "describe a task for a new session" {
+            let d: String = d.chars().take(20).collect();
+            return (State::Skip, t("输入框里有没发出去的字（{d}…），没动").replace("{d}", &d));
+        }
+    } else {
+        // 正接在那个后台会话上看：输入框规矩照常
+        if busy(pane) || screen_state(&lines) != "idle" {
+            return skip("正在工作或等你确认，没动");
+        }
+        match draft_text(&lines, &read(pane, true)) {
+            None => return skip("认不出输入框，为防丢字没动"),
+            Some(d) if !d.is_empty() => {
+                let d: String = d.chars().take(20).collect();
+                return (State::Skip, t("输入框里有没发出去的字（{d}…），没动").replace("{d}", &d));
+            }
+            _ => {}
+        }
+    }
+    let from = accts.iter().find(|a| a.dir == src);
+    let stop = format!(
+        "{} claude stop {}",
+        env_prefix(src, from.map_or(&[][..], |a| &a.env[..]), accts),
+        quote(job)
+    );
+    let mut line = env_prefix(&to.dir, &to.env, accts) + " claude";
+    for a in relaunch_args(argv, &sid) {
+        line += &format!(" {}", quote(&a));
+    }
+    let line = format!("{stop} && {line}");
+    if o.dry {
+        return (State::Ok, t("（演练）会退出再执行：{line}").replace("{line}", &line));
+    }
+    log(t("{pane} 退出").replace("{pane}", pane));
+    if !in_agents_view(&lines) {
+        type_line(pane, "/exit"); // 从接着看的后台会话退回列表
+        let end = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < end && !in_agents_view(&read(pane, false)) {
+            std::thread::sleep(Duration::from_millis(300));
+        }
+    }
+    keys(pane, &["ctrl+c"]);
+    std::thread::sleep(Duration::from_millis(400));
+    keys(pane, &["ctrl+c"]); // 「Press Ctrl-C again to exit · N agents will keep running」
+    let mut out = false;
+    for _ in 0..20 {
+        std::thread::sleep(Duration::from_millis(500));
+        if at_shell(pane) {
+            out = true;
+            break;
+        }
+    }
+    if !out {
+        return fail(t("它没有退出（可能刚好开始工作），没再动"));
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    type_line(pane, &line);
+    finish(pane, pid, &sid, to, &line, !bg.is_empty(), &bg)
 }
 
 // ---- 只改这个会话的模型、effort、ultracode ----------------------------------------------------
@@ -599,6 +753,9 @@ pub const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
 /// 往 Claude 输入框里打命令之前：空闲、没在等确认、输入框是空的。
 pub fn ready(pane: &str) -> Result<(), String> {
+    if !leave_agents_view(pane) {
+        return Err(t("停在按 ← 进的会话列表里，按 esc 没回到对话，没动"));
+    }
     let lines = read(pane, false);
     if busy(pane) || screen_state(&lines) != "idle" {
         return Err(t("Claude 正在工作或等你确认，等它停下再换"));
@@ -898,6 +1055,13 @@ mod tests {
         let got = bg_commands(std::process::id());
         let _ = c.kill();
         assert_eq!(got, vec!["sleep 5; echo 'done'".to_string()]);
+    }
+
+    #[test]
+    fn agents_view() {
+        let rule = "──────────";
+        assert!(in_agents_view(&v(&[rule, "❯ describe a task for a new session", rule, "  ⏵⏵ auto mode · enter to return · space to reply · ? for shortcuts"])));
+        assert!(!in_agents_view(&v(&[rule, "❯ ", rule, "  ⏵⏵ auto mode on (shift+tab to cycle) · ← 8 agents"])));
     }
 
     #[test]

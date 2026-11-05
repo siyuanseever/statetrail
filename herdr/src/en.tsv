@@ -135,6 +135,7 @@ Esc 清掉搜索	Esc clears
 还没有开着的 Claude	no Claude running
 [statetrail] 刚才换账号到 {to}，退出时停掉了你的后台任务/定时任务。请对照对话记录和 CronList 看还需要哪些，需要的重新挂上，没用的不用管。	[statetrail] I just switched you to account {to}; exiting stopped your background/scheduled tasks. Check the conversation and CronList, restart the ones still needed, ignore the rest.
 [statetrail] 刚才换账号到 {to}，退出时停掉了你在后台挂着的 {n} 个命令，原命令在 {file}。还需要的请照原样在后台重新跑起来，没用的不用管；会话内的定时任务也可能没了，用 CronList 看一眼。	[statetrail] I just switched you to account {to}; exiting stopped {n} background commands (originals in {file}). Rerun the ones still needed in the background, ignore the rest; session cron jobs may be gone too, check CronList.
-{pane} 告诉它重挂后台任务	{pane}: telling it to restart background tasks
 已告诉它重挂停掉的后台任务	told it to restart the stopped background tasks
 停掉的后台任务没能告诉它，请自己提醒它重挂	could not tell it about the stopped background tasks; remind it yourself
+停在按 ← 进的会话列表里，按 esc 没回到对话，没动	stuck in the ← session list; esc did not return to the conversation; left alone
+它按 ← 移到后台过，但没找到那个后台会话，没动	it was moved to the background with ←, but that background session was not found; left alone
