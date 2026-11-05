@@ -295,6 +295,85 @@ fn quote(s: &str) -> String {
     }
 }
 
+/// 这个 claude 进程挂着的后台命令（Claude Code 的 run_in_background）。它们是 claude 的直接子进程，形如
+/// `zsh -c source <配置目录>/shell-snapshots/… && eval '<命令>' < /dev/null && pwd -P >| …`；MCP 服务器之类别的子进程不算。
+/// 只在空闲时调：那时没有前台命令在跑，挂着的都是后台的。退出会把它们一起停掉，切完要告诉新进程重挂哪些。
+fn bg_commands(pid: u32) -> Vec<String> {
+    let Ok(out) = std::process::Command::new("ps").args(["-A", "-ww", "-o", "ppid=,args="]).output() else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|ln| {
+            let (pp, args) = ln.trim_start().split_once(' ')?;
+            if pp.parse::<u32>().ok()? != pid {
+                return None;
+            }
+            bg_command(args.trim_start())
+        })
+        .collect()
+}
+
+fn bg_command(args: &str) -> Option<String> {
+    if !args.contains("/shell-snapshots/") {
+        return None;
+    }
+    let rest = &args[args.find("&& eval ")? + "&& eval ".len()..];
+    let body = &rest[..rest.rfind(" < /dev/null && pwd -P")?];
+    Some(unquote(body).replace("\\012", "\n")) // ps 把命令里的换行显示成 \012
+}
+
+/// 去掉一层 shell 引号：'…'、"…"（认 \" \\ \$ \`）和裸字符拼在一起，比如 'a'"'"'b' → a'b。
+fn unquote(s: &str) -> String {
+    let (mut out, mut it) = (String::new(), s.chars().peekable());
+    while let Some(c) = it.next() {
+        match c {
+            '\'' => out.extend(it.by_ref().take_while(|&c| c != '\'')),
+            '"' => {
+                while let Some(c) = it.next() {
+                    match c {
+                        '"' => break,
+                        '\\' if it.peek().is_some_and(|n| "\"\\$`".contains(*n)) => out.extend(it.next()),
+                        _ => out.push(c),
+                    }
+                }
+            }
+            '\\' => out.extend(it.next()),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// 切完以后在新进程里说一声：哪些后台任务被退出停掉了，原命令记在文件里，让它自己判断重挂哪些。
+/// 等它起来、输入框出现再打字；60 秒还没就绪就不说了，返回 false。
+fn tell_bg_stopped(pane: &str, sid: &str, to: &str, cmds: &[String]) -> bool {
+    let msg = if cmds.is_empty() {
+        t("[statetrail] 刚才换账号到 {to}，退出时停掉了你的后台任务/定时任务。请对照对话记录和 CronList 看还需要哪些，需要的重新挂上，没用的不用管。")
+            .replace("{to}", to)
+    } else {
+        let dir = crate::state_dir().join("switch-bg");
+        let file = dir.join(format!("{sid}.txt"));
+        let body: String = cmds.iter().enumerate().map(|(i, c)| format!("# {}\n{c}\n\n", i + 1)).collect();
+        if std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&file, body)).is_err() {
+            return false;
+        }
+        t("[statetrail] 刚才换账号到 {to}，退出时停掉了你在后台挂着的 {n} 个命令，原命令在 {file}。还需要的请照原样在后台重新跑起来，没用的不用管；会话内的定时任务也可能没了，用 CronList 看一眼。")
+            .replace("{to}", to)
+            .replace("{n}", &cmds.len().to_string())
+            .replace("{file}", &file.to_string_lossy())
+    };
+    let end = Instant::now() + Duration::from_secs(60);
+    while Instant::now() < end {
+        std::thread::sleep(Duration::from_secs(1));
+        if ready(pane).is_ok() {
+            type_line(pane, &msg);
+            return true;
+        }
+    }
+    false
+}
+
 /// 同一个标签页里除了 pane 自己以外的队友 → [(窗格, 队友名)]。队友是领队起的 claude，命令行带 --agent-id。
 fn team_mates(pane: &str) -> Vec<(String, String)> {
     let Some(tab) = herdr::pane_info(pane).and_then(|i| i["tab_id"].as_str().map(str::to_owned)) else {
@@ -385,9 +464,11 @@ pub fn switch_one(pane: &str, to: &Account, accts: &[Account], o: &Opts, log: &d
     if busy(pane) || screen_state(&lines) != "idle" {
         return skip("正在工作或等你确认，没动");
     }
-    if !o.stop_bg && has_background(&lines) {
+    let mut had_bg = has_background(&lines);
+    if !o.stop_bg && had_bg {
         return skip("它挂着后台任务/定时任务，切换会把它们停掉，没动");
     }
+    let bg = if o.stop_bg { bg_commands(pid) } else { Vec::new() };
     if argv.iter().any(|a| a == "--agent-id") {
         return skip("队友：随领队收队，不单独切");
     }
@@ -463,6 +544,7 @@ pub fn switch_one(pane: &str, to: &Account, accts: &[Account], o: &Opts, log: &d
         if read(pane, false).iter().any(|l| l.contains("Background work is running")) {
             if o.stop_bg {
                 keys(pane, &["enter"]); // 调用方确认过要停：默认选中第 1 项「Exit and stop tasks」
+                had_bg = true;
                 continue;
             }
             keys(pane, &["esc"]); // 「退出并停掉后台任务」的确认：取消，留下
@@ -487,7 +569,18 @@ pub fn switch_one(pane: &str, to: &Account, accts: &[Account], o: &Opts, log: &d
                     crate::pane::send_command(&sb, "rescan");
                 }
             }
-            return (State::Ok, t("已切到 {to}，接着原会话").replace("{to}", &to.name));
+            let done = t("已切到 {to}，接着原会话").replace("{to}", &to.name);
+            if !(had_bg || !bg.is_empty()) {
+                return (State::Ok, done);
+            }
+            // 后台任务是调用方确认过才停的：告诉新进程停了哪些，它自己判断重挂哪些（它不知道，会一直等那些任务的结果）
+            log(t("{pane} 告诉它重挂后台任务").replace("{pane}", pane));
+            let note = if tell_bg_stopped(pane, &sid, &to.name, &bg) {
+                t("已告诉它重挂停掉的后台任务")
+            } else {
+                t("停掉的后台任务没能告诉它，请自己提醒它重挂")
+            };
+            return (State::Ok, format!("{done}；{note}"));
         }
     }
     fail(
@@ -784,6 +877,27 @@ mod tests {
         assert!(!ghostly("\x1b[38;2;255;193;7m"));
         assert!(ghostly("\x1b[38;5;244m"));
         assert!(ghostly("\x1b[3m"));
+    }
+
+    #[test]
+    fn bg_cmd() {
+        let a = r#"/bin/zsh -c source /Users/x/.claude/shell-snapshots/snapshot-zsh-1.sh 2>/dev/null || true && { \builtin unalias -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'for i in 1 2; do date '"'"'+%F %T'"'"'; echo "$i"; done' < /dev/null && pwd -P >| /tmp/claude-1cde-cwd"#;
+        assert_eq!(bg_command(a).as_deref(), Some(r#"for i in 1 2; do date '+%F %T'; echo "$i"; done"#));
+        assert_eq!(bg_command("python3 /x/contacts_mcp.py"), None);
+        let nl = r"zsh -c source /h/shell-snapshots/s.sh && eval 'python3 -c \012print(1)' < /dev/null && pwd -P >| /t";
+        assert_eq!(bg_command(nl).as_deref(), Some("python3 -c \nprint(1)"));
+        assert_eq!(unquote(r#""a\"b" c'd'"#), r#"a"b cd"#);
+    }
+
+    #[test]
+    fn bg_children() {
+        // 真起一个和 Claude Code 后台命令同样形状的子进程，从 ps 里认回原命令（用 bash：sh 是 POSIX 模式，source 失败会直接退出）
+        let script = "source /nonexistent/shell-snapshots/s.sh 2>/dev/null || true && eval 'sleep 5; echo '\"'\"'done'\"'\"'' < /dev/null && pwd -P >| /dev/null";
+        let mut c = std::process::Command::new("bash").args(["-c", script]).spawn().unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        let got = bg_commands(std::process::id());
+        let _ = c.kill();
+        assert_eq!(got, vec!["sleep 5; echo 'done'".to_string()]);
     }
 
     #[test]
