@@ -2,7 +2,7 @@
 //! 表头按钮）、后台线程（跳转、查额度、数 git）各往里送。对话记录和状态文件每秒 stat 一次（变了才读新追加的部分），
 //! 不调 tmux；谁在被看由常驻进程告诉它。对应 herdr 版的 pane.rs。
 
-use crossterm::event::{self, Event, MouseButton, MouseEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
 use crossterm::{execute, terminal};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
+use unicode_width::UnicodeWidthStr;
 
 use crate::header::{self, Button};
 use crate::i18n::t;
@@ -29,6 +30,7 @@ const GIT_EVERY: Duration = Duration::from_secs(10); // Git 按钮后面的数�
 // 焦点在这一对 Claude / 轨迹上时，多久读一次 Claude 的屏幕、看它停在哪一轮（herdr 版同一个数）。别的轨迹不读：
 // 读一次屏要起一次 tmux（约 3 毫秒）
 const FOLLOW_EVERY: Duration = Duration::from_millis(500);
+const MANUAL_HOLD: Duration = Duration::from_secs(8); // 滚轮 / 键盘挪了选中之后，这么久不跟 Claude 的屏幕
 
 enum Msg {
     Input(Event),
@@ -86,6 +88,10 @@ struct Trail {
     self_focused: bool, // 焦点在轨迹自己身上：你在用键盘挪选中，不跟 Claude 的屏幕（不然 Claude 一输出就把选中抢回去）
     last_screen: u64,   // 上次读到的 Claude 屏幕（哈希）：没变就不用再认
     reveal: bool,       // 选中的那一轮刚被跟着换了：画的时候把它滚进列表的可见范围
+    manual_until: Option<Instant>, // 刚用滚轮 / 键盘挪过选中：这之前不跟 Claude 的屏幕（Claude 一输出就会把选中抢回去）
+    up_at: Option<(usize, usize)>, // 表头里的 ▲：(第几行, 占到第几列)
+    down_at: Option<usize>,        // 底部的 ▼：占到第几列
+    footer_top: u16,
     cwd: String,  // Claude 的目录（Git 按钮后面的数字数这里）
     git: Option<usize>,
     next_git: Instant,
@@ -233,6 +239,10 @@ impl Trail {
 
     /// 点表头：最上面几行是按钮；宽版「N 轮」那一行什么都不做；模型、柱子那几行点了去查一次真实额度。
     fn header_click(&mut self, ln: usize, col: usize, narrow: bool, tx: &Sender<Msg>) {
+        if self.up_at.is_some_and(|(l, slot)| l == ln && col <= slot + 1) {
+            self.page(-1); // 点在行首 ▲ 那一段（偏一格也算）
+            return;
+        }
         if let Some(row) = self.rows.get(ln.wrapping_sub(1)) {
             if let Some(a) = header::button_at(row, col).map(str::to_owned) {
                 self.act(&a, tx);
@@ -240,6 +250,71 @@ impl Trail {
         } else if narrow || ln != self.head_ln {
             self.kick_usage(true, tx);
         }
+    }
+
+    /// 选中往上 / 往下挪几格（滚轮一格一格，↑↓ 也是），列表跟着滚到它。只挪选中，不跳：按 Enter 才让 Claude 跳过去
+    /// （herdr 版用户 2026-10-29：「鼠标滚动时选中项上下移动」「enter 来确认跳转」）。
+    fn move_sel(&mut self, d: isize) {
+        let Some(tr) = &self.tr else { return };
+        let stops = tr.visible();
+        let Some(last) = stops.len().checked_sub(1) else { return };
+        // 收着的「已压缩」那几轮挪不进去：列表里没有它们
+        let cells: Vec<usize> = (0..=last).filter(|&i| self.expanded || !stops[i].compacted).collect();
+        if cells.is_empty() {
+            return;
+        }
+        let cur = stops.iter().position(|st| Some(st.id.as_str()) == self.opened.as_deref()).unwrap_or(last);
+        let at = cells.iter().position(|&i| i >= cur).unwrap_or(cells.len() - 1);
+        let to = at.saturating_add_signed(d).min(cells.len() - 1);
+        self.opened = Some(stops[cells[to]].id.clone());
+        self.reveal = true;
+        self.follow = to == cells.len() - 1;
+        self.manual_until = Some(Instant::now() + MANUAL_HOLD);
+    }
+
+    /// 点 ▲ / ▼：翻一屏的轮数，少翻一项留一轮重叠（边上那一轮常常只露出半截）
+    fn page(&mut self, d: i32) {
+        let step = self.view.2.saturating_sub(1).max(1);
+        if d < 0 {
+            self.offset = self.offset.saturating_sub(step);
+            self.follow = false;
+        } else {
+            self.offset += step; // 画的时候按最底夹住；下面已经没有了就重新跟着走
+            self.follow = self.view.1 <= step;
+        }
+    }
+
+    /// 键盘（焦点在轨迹上时）：↑↓ / j k 挪一格，PageUp / PageDown 挪一屏，Home / End（g / G）到第一轮 / 最后一轮，
+    /// Enter 让 Claude 跳到选中的那一轮，Esc 把焦点还给 Claude。返回 false = 不认识的键，不用重画。
+    fn key(&mut self, code: KeyCode, tx: &Sender<Msg>) -> bool {
+        let page = self.view.2.saturating_sub(1).max(1) as isize;
+        match code {
+            KeyCode::Up | KeyCode::Char('k') => self.move_sel(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.move_sel(1),
+            KeyCode::PageUp => self.move_sel(-page),
+            KeyCode::PageDown => self.move_sel(page),
+            KeyCode::Home | KeyCode::Char('g') => self.move_sel(isize::MIN / 2),
+            KeyCode::End | KeyCode::Char('G') => self.move_sel(isize::MAX / 2),
+            KeyCode::Enter => {
+                let Some(tr) = &self.tr else { return false };
+                let stops = tr.visible();
+                if let Some(i) = stops.iter().position(|st| Some(st.id.as_str()) == self.opened.as_deref()) {
+                    self.jump(i, tx);
+                }
+            }
+            KeyCode::Esc => {
+                self.focus_claude();
+                return false;
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// 把焦点还给 Claude（Esc、跳完）
+    fn focus_claude(&mut self) {
+        let _ = tmux::run(&["select-pane", "-t", &self.target]);
+        self.self_focused = false;
     }
 
     /// 点了一轮：跳转放在线程里，主线程照常画；新的一次点击让旧的那次停下。
@@ -319,7 +394,8 @@ impl Trail {
     /// 往上翻着就是屏幕上最上面露出开头的那一轮，它的开头已经在屏幕下半截时算上一轮（你看的多半是上一轮的结尾）；
     /// 一轮的开头都没露出来（长回复的中段）就不动。选中换了返回 true。
     fn follow_screen(&mut self) -> bool {
-        if self.self_focused || self.jumping_until.is_some_and(|t| Instant::now() < t) {
+        let now = Instant::now();
+        if self.self_focused || self.jumping_until.is_some_and(|t| now < t) || self.manual_until.is_some_and(|t| now < t) {
             return false;
         }
         let Some(tr) = &self.tr else { return false };
@@ -453,6 +529,10 @@ pub fn run(cfg: Config, target: &str) {
         self_focused: false,
         last_screen: 0,
         reveal: false,
+        manual_until: None,
+        up_at: None,
+        down_at: None,
+        footer_top: u16::MAX,
         cwd: cwd.to_owned(),
         git: None,
         next_git: Instant::now(),
@@ -519,7 +599,7 @@ fn run_loop(
             let items = view.items();
             let room = size.width.saturating_sub(2) as usize;
             s.rows = button_rows(narrow);
-            let info = header::Info {
+            let mut info = header::Info {
                 cfg_dir: &s.cfg_dir,
                 model: &model,
                 ctx: &ctx,
@@ -533,6 +613,57 @@ fn run_loop(
                 buttons: Some(&s.rows),
                 git: s.git,
             };
+            let head_len = if narrow {
+                header::narrow(size.width as usize, &info).len()
+            } else {
+                header::wide(size.width as usize, &info).0.len()
+            };
+            // 列表露出来的范围决定 ▲ / ▼：列表比窗格长时下面多一行「▼ 5」（窄版的 ▲ 也多占表头一行），所以最多算两遍
+            let mut foot_len = 0;
+            let (mut slot, mut counts);
+            loop {
+                let rows = (size.height as usize).saturating_sub(head_len + 1 + foot_len + usize::from(foot_len > 0) + usize::from(narrow && foot_len > 0));
+                let bottom = ui::bottom_offset(&view, &items, room, rows);
+                if s.follow {
+                    s.offset = bottom;
+                }
+                s.offset = s.offset.min(bottom);
+                // 选中换了（跟着 Claude 的屏幕、滚轮、键盘）：不在露出来的范围里就滚到刚好整个露出来，一轮一轮挪时列表也一轮一轮走
+                if s.reveal
+                    && let Some(k) = items.iter().position(|&it| view.selected(it))
+                {
+                    if k < s.offset {
+                        s.offset = k;
+                    }
+                    while s.offset < bottom && s.offset < k && !ui::fits(&view, &items, s.offset, k, rows, room) {
+                        s.offset += 1;
+                    }
+                    s.follow = s.offset >= bottom;
+                }
+                counts = ui::view_counts(&view, &ui::visible(&view, &items, s.offset, rows, room));
+                slot = if counts.0 > 0 || counts.1 > 0 {
+                    UnicodeWidthStr::width(format!("▼{}{}", if narrow { "" } else { " " }, stops.len()).as_str())
+                } else {
+                    0
+                };
+                let want = usize::from(slot > 0);
+                if want == foot_len {
+                    break;
+                }
+                foot_len = want;
+            }
+            s.reveal = false;
+            s.view = counts;
+            let tag = |arrow: &str, n: usize| {
+                if n > 0 {
+                    format!("{arrow}{}{n}", if narrow { "" } else { " " })
+                } else {
+                    String::new()
+                }
+            };
+            let up_tag = tag("▲", counts.0);
+            info.up_tag = &up_tag;
+            info.slot = slot;
             let head = if narrow {
                 header::narrow(size.width as usize, &info)
             } else {
@@ -540,26 +671,14 @@ fn run_loop(
                 s.head_ln = head_ln;
                 lines
             };
-            let rows = (size.height as usize).saturating_sub(head.len() + 1);
-            let bottom = ui::bottom_offset(&view, &items, room, rows);
-            if s.follow {
-                s.offset = bottom;
-            }
-            s.offset = s.offset.min(bottom);
-            // 选中换了（跟着 Claude 的屏幕）：不在露出来的范围里就滚到刚好整个露出来
-            if std::mem::take(&mut s.reveal)
-                && let Some(k) = items.iter().position(|&it| view.selected(it))
-            {
-                if k < s.offset {
-                    s.offset = k;
-                }
-                while s.offset < bottom && s.offset < k && !ui::fits(&view, &items, s.offset, k, rows, room) {
-                    s.offset += 1;
-                }
-                s.follow = s.offset >= bottom;
-            }
-            s.view = ui::view_counts(&view, &ui::visible(&view, &items, s.offset, rows, room));
-            let footer: Vec<render::SLine> = Vec::new();
+            s.up_at = (slot > 0 && counts.0 > 0).then_some((head.len(), slot));
+            // 底部只有「▼ 5」这一行（翻到底了位置照样留着，列表不跟着上下跳）；一屏放得下就没有底部
+            let footer: Vec<render::SLine> = if slot > 0 {
+                vec![render::lead(Vec::new(), &tag("▼", counts.1), slot)]
+            } else {
+                Vec::new()
+            };
+            s.down_at = (slot > 0 && counts.1 > 0).then_some(slot);
             let mut drawn = None;
             term.draw(|f| {
                 drawn = Some(ui::draw(f, &head, &footer, &view, s.offset));
@@ -567,9 +686,9 @@ fn run_loop(
             if let Some(d) = drawn {
                 s.hits = d.hits;
                 s.header_len = d.list_top.saturating_sub(1);
+                s.footer_top = d.footer_top;
             }
         }
-
         // 等下一件事
         let now = Instant::now();
         let mut wake = next_tick.min(next_poll);
@@ -585,13 +704,12 @@ fn run_loop(
         let timed_out = matches!(msg, Err(mpsc::RecvTimeoutError::Timeout));
         match msg {
             Ok(Msg::Input(Event::Mouse(m))) => match m.kind {
-                MouseEventKind::ScrollUp => {
-                    s.offset = s.offset.saturating_sub(1);
-                    s.follow = false;
-                }
-                MouseEventKind::ScrollDown => {
-                    s.offset += 1;
-                    s.follow = s.view.1 <= 1;
+                MouseEventKind::ScrollUp => s.move_sel(-1),
+                MouseEventKind::ScrollDown => s.move_sel(1),
+                MouseEventKind::Down(MouseButton::Left) if m.row >= s.footer_top => {
+                    if s.down_at.is_some_and(|slot| (m.column as usize).saturating_sub(1) <= slot + 1) {
+                        s.page(1); // 点在行首 ▼ 那一段（偏一格也算）
+                    }
                 }
                 MouseEventKind::Down(MouseButton::Left) if m.row < s.header_len => {
                     // 表头的字从第 3 列开始（左边 2 列和列表的指针对齐）；列号从 1 数
@@ -614,6 +732,12 @@ fn run_loop(
                     continue;
                 }
             },
+            Ok(Msg::Input(Event::Key(k))) if k.kind == KeyEventKind::Press => {
+                if !s.key(k.code, tx) {
+                    redraw = false;
+                    continue;
+                }
+            }
             Ok(Msg::Input(Event::Resize(..))) => {}
             Ok(Msg::Input(_)) => {
                 redraw = false;
