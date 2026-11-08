@@ -92,6 +92,7 @@ struct Trail {
     up_at: Option<(usize, usize)>, // 表头里的 ▲：(第几行, 占到第几列)
     down_at: Option<usize>,        // 底部的 ▼：占到第几列
     footer_top: u16,
+    last_wide: Option<i64>, // 切到窄版之前的宽度：切回宽版时回到它
     cwd: String,  // Claude 的目录（Git 按钮后面的数字数这里）
     git: Option<usize>,
     next_git: Instant,
@@ -233,8 +234,27 @@ impl Trail {
             }
             "files" => open::spawn(&self.cfg.scripts.join("float-tool.sh"), &[&self.target, "files"]),
             "close" => open::close(&self.target), // 连同自己一起关掉；记下是你关的，常驻进程不再自动开
+            "narrow" | "wide" => self.toggle_width(),
             _ => {}
         }
+    }
+
+    /// 窄版（17 列）和宽版之间切：挪的是 Claude 和轨迹之间那条线，上面那条命令行跟着一起变。
+    /// 宽版回到上次的宽度，没有就按配置的比例（默认这一对的 34%）。画哪一版按窗格实际宽度定。
+    fn toggle_width(&mut self) {
+        let Some(w) = tmux::display(&self.me, "#{pane_width}").and_then(|w| w.parse::<i64>().ok()) else { return };
+        let cols = if w >= WIDE_MIN as i64 {
+            self.last_wide = Some(w);
+            crate::NARROW
+        } else {
+            let total = tmux::display(&self.target, "#{pane_width}")
+                .and_then(|x| x.parse::<i64>().ok())
+                .unwrap_or(0)
+                + w
+                + 1;
+            self.last_wide.unwrap_or(((total as f64) * self.cfg.width).round() as i64).max(WIDE_MIN as i64)
+        };
+        let _ = tmux::run(&["resize-pane", "-t", &self.me, "-x", &cols.to_string()]);
     }
 
     /// 点表头：最上面几行是按钮；宽版「N 轮」那一行什么都不做；模型、柱子那几行点了去查一次真实额度。
@@ -445,18 +465,18 @@ impl Trail {
     }
 }
 
-/// 表头最上面的按钮：宽版一行（⇊ 到最底、Git + 没提交的文件数、文件、⟳ + 额度多新、✕ 关掉），
-/// 窄版放不下，分两行（⇊ ⟳ ✕ / Git 文件）。每个按钮占 3 格，点偏一格也算。
+/// 表头最上面的按钮：宽版一行（» 切到窄版、⇊ 到最底、Git + 没提交的文件数、文件、⟳ + 额度多新、✕ 关掉），
+/// 窄版放不下，分两行（« 切回宽版 ⇊ ⟳ ✕ / Git 文件）。每个按钮占 3 格，点偏一格也算。
 fn button_rows(narrow: bool) -> Vec<Vec<Button>> {
     let b = |name: &str, act: &str, extra: usize| (header::icon(name), act.to_owned(), extra);
     let close = (if header::text_tier() { "x".into() } else { "✕".into() }, "close".to_owned(), 0);
     if narrow {
         vec![
-            vec![b("bottom", "bottom", 0), b("usage", "usage", 0), close],
+            vec![b("wide", "wide", 0), b("bottom", "bottom", 0), b("usage", "usage", 0), close],
             vec![b("git", "git", 0), b("files", "files", 0)],
         ]
     } else {
-        vec![vec![b("bottom", "bottom", 0), b("git", "git", 4), b("files", "files", 0), b("usage", "usage", 10), close]]
+        vec![vec![b("narrow", "narrow", 0), b("bottom", "bottom", 0), b("git", "git", 4), b("files", "files", 0), b("usage", "usage", 10), close]]
     }
 }
 
@@ -533,6 +553,7 @@ pub fn run(cfg: Config, target: &str) {
         up_at: None,
         down_at: None,
         footer_top: u16::MAX,
+        last_wide: None,
         cwd: cwd.to_owned(),
         git: None,
         next_git: Instant::now(),
