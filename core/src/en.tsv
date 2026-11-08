@@ -143,3 +143,6 @@ Esc 清掉搜索	Esc clears
 不在 git 仓库里，下面两层也没有仓库	Not a git repo, and none two levels down
 开不了新窗口	Could not open a new window
 额度只读现有读数；要实时查询，在配置里设 live_usage = true	Quota is read from existing readings; set live_usage = true to query live
+切账号：{msg}	Switch account: {msg}
+只配了一个账号，在 {path} 里加上另一个	Only one account; add another in {path}
+没找到 {path}	Not found: {path}

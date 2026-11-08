@@ -44,6 +44,7 @@ enum Msg {
     Jumped(String, String), // (轮次 id，用逗号连着, 结果)
     Git(Option<usize>),
     Classified(bool), // 后台分完一批章（成功没有）：重读分章文件
+    Rescan,           // 换完账号：按新进程重认配置目录
     Indexing(usize, usize),       // 跨会话搜索在建索引：(已读, 总数)
     Indexed(Vec<search::Session>), // 索引建好了
     Wake,
@@ -122,6 +123,7 @@ struct Trail {
     code: Option<std::time::SystemTime>,     // 起来时程序文件的修改时间
     code_new: Option<std::time::SystemTime>,
     restart: bool,                           // 程序换了：主循环退出后原地换成新程序
+    hot: Vec<(usize, usize, usize)>,         // 表头里点了弹账号菜单的那段字（header::hot_spots_after）
     cwd: String,  // Claude 的目录（Git 按钮后面的数字数这里）
     git: Option<usize>,
     next_git: Instant,
@@ -304,6 +306,10 @@ impl Trail {
     fn header_click(&mut self, ln: usize, col: usize, narrow: bool, tx: &Sender<Msg>) {
         if self.up_at.is_some_and(|(l, slot)| l == ln && col <= slot + 1) {
             self.page(-1); // 点在行首 ▲ 那一段（偏一格也算）
+            return;
+        }
+        if let Some(&(i, start, _)) = self.hot.iter().find(|(i, a, b)| *i + 1 == ln && (*a..*b).contains(&col.saturating_sub(1))) {
+            self.account_menu((start + 2) as u16, (i + 1) as u16);
             return;
         }
         if let Some(row) = self.rows.get(ln.wrapping_sub(1)) {
@@ -614,8 +620,67 @@ impl Trail {
         self.menu = Some(ui::Menu { x, y, items: vec![(key, label, false)] });
     }
 
+    /// 点表头里的账号名：列出 ~/.config/claude-tmux/accounts.json 里的账号，现在这个打勾
+    fn account_menu(&mut self, x: u16, y: u16) {
+        let items: Vec<(String, String, bool)> = accounts()
+            .into_iter()
+            .map(|(name, dir)| (format!("acct {name}"), name, dir == self.cfg_dir))
+            .collect();
+        if items.len() < 2 {
+            self.say(
+                t("只配了一个账号，在 {path} 里加上另一个").replace("{path}", "~/.config/claude-tmux/accounts.json"),
+                Duration::from_secs(6),
+            );
+            return;
+        }
+        self.menu = Some(ui::Menu { x, y, items });
+    }
+
+    /// 把这个 Claude 换到另一个账号：交给 claude-tmux-sessions 的 switch_account.py（正在干活、输入框里有没发的字就不动；
+    /// 窗口里有队友先让领队收队）。要等 Claude 退出重起，几秒到几十秒，放后台线程里；切换期间写 run/<Claude 窗格>.switch，
+    /// 常驻进程看到就不会把 Claude 退出那几秒当成「Claude 没了」收掉轨迹。
+    fn switch_account(&mut self, to: String, tx: &Sender<Msg>) {
+        let script = self.cfg.scripts.join("switch_account.py");
+        if !script.exists() {
+            self.say(t("没找到 {path}").replace("{path}", &script.to_string_lossy()), Duration::from_secs(8));
+            return;
+        }
+        let (target, tx) = (self.target.clone(), tx.clone());
+        let file = crate::run_dir().join(format!("{target}.switch"));
+        let put = move |state: &str, msg: &str| {
+            let v = serde_json::json!({"state": state, "msg": msg, "at": chrono::Local::now().timestamp()});
+            let tmp = file.with_extension("tmp");
+            if std::fs::write(&tmp, v.to_string()).is_ok() {
+                let _ = std::fs::rename(&tmp, &file);
+            }
+        };
+        put("running", "");
+        self.say(t("正在换…"), Duration::from_secs(60));
+        std::thread::spawn(move || {
+            let out = std::process::Command::new("python3")
+                .arg(&script)
+                .args(["--to", &to, "--pane", &target])
+                .stdin(std::process::Stdio::null())
+                .output();
+            // 一行一个窗格：「状态 窗格 说明」
+            let line = out.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned()).unwrap_or_default();
+            let state = line.split_whitespace().next().unwrap_or("fail");
+            let msg = line.split_once(target.as_str()).map_or(line.as_str(), |(_, m)| m.trim()).to_owned();
+            put(state, &msg);
+            let _ = tx.send(Msg::Rescan);
+            let _ = tx.send(Msg::Flash(t("切账号：{msg}").replace("{msg}", &msg), Duration::from_secs(10)));
+        });
+    }
+
     /// 菜单里点了一项
-    fn apply_menu(&mut self, key: &str, _tx: &Sender<Msg>) {
+    fn apply_menu(&mut self, key: &str, tx: &Sender<Msg>) {
+        if let Some(("acct", name)) = key.split_once(' ') {
+            let cur = accounts().into_iter().find(|(_, d)| *d == self.cfg_dir).map(|(n, _)| n);
+            if cur.as_deref() != Some(name) {
+                self.switch_account(name.to_owned(), tx);
+            }
+            return;
+        }
         if let Some(("chap", value)) = key.split_once(' ') {
             // 手动标的记进分章文件，盖过 Haiku 的判断（重新读一遍再写：另一个轨迹可能刚写过）
             if let (Some(sid), Some((how, id))) = (self.sid.clone(), value.split_once(' ')) {
@@ -866,6 +931,22 @@ fn spawn_threads(tx: &Sender<Msg>, me: &str) {
     }
 }
 
+/// ~/.config/claude-tmux/accounts.json 里的账号：(名字, 配置目录)。和 switch_account.py 读的是同一份
+fn accounts() -> Vec<(String, PathBuf)> {
+    let v: serde_json::Value = std::fs::read(crate::home().join(".config/claude-tmux/accounts.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    let mut out: Vec<(String, PathBuf)> = v["accounts"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(name, a)| (name.clone(), crate::expand(a["config_dir"].as_str().unwrap_or("~/.claude"))))
+        .collect();
+    out.sort();
+    out
+}
+
 /// STATETRAIL_DEBUG=1 时往状态目录的 debug.log 记一行（开发用）
 fn debug(line: &str) {
     if std::env::var_os("STATETRAIL_DEBUG").is_some()
@@ -937,6 +1018,7 @@ pub fn run(cfg: Config, target: &str) {
         code: crate::exe_mtime(),
         code_new: None,
         restart: false,
+        hot: Vec::new(),
         cwd: cwd.to_owned(),
         git: None,
         next_git: Instant::now(),
@@ -1125,6 +1207,8 @@ fn run_loop(
                 lines
             };
             s.up_at = (slot > 0 && counts.0 > 0).then_some((head.len(), slot));
+            let accts = [claude::current_account(&s.cfg_dir), claude::short_account(&s.cfg_dir)];
+            s.hot = header::hot_spots_after(&head, &accts, s.rows.len());
             let mut head = head;
             let found: Vec<ui::Found> = s
                 .found()
@@ -1215,6 +1299,10 @@ fn run_loop(
                     found_off = off;
                 }
                 drawn = Some(d);
+                // 能点的账号名垫一层底色
+                for &(i, a, b) in &s.hot {
+                    ui::mark(f, i as u16, (a + 2) as u16, (b + 2) as u16, false);
+                }
                 if let Some(m) = &s.menu {
                     menu_hits = ui::draw_menu(f, m, None);
                 }
@@ -1345,6 +1433,7 @@ fn run_loop(
                     s.index = Some(all);
                 }
             }
+            Ok(Msg::Rescan) => s.rescan(),
             Ok(Msg::Classified(ok)) => {
                 s.classifying = false;
                 if ok {
