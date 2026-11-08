@@ -74,19 +74,16 @@ fn parse(c: &str) -> Option<Color> {
     })
 }
 
-fn herdr_config() -> toml::Table {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| crate::home().join(".config"));
-    std::fs::read_to_string(base.join("herdr/config.toml"))
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or_default()
+/// 宿主怎么拿到 [theme] 那一段（herdr 版读 herdr 的 config.toml，tmux 版读自己的配置）。第一次要颜色时才调。
+static SOURCE: OnceLock<fn() -> Option<toml::Table>> = OnceLock::new();
+
+pub fn set_source(f: fn() -> Option<toml::Table>) {
+    let _ = SOURCE.set(f);
 }
 
 fn load() -> Colors {
     let all: Value = serde_json::from_str(THEMES).unwrap_or(Value::Null);
-    let conf = herdr_config();
+    let conf = SOURCE.get().and_then(|f| f()).unwrap_or_default();
     let th = conf.get("theme").and_then(toml::Value::as_table);
     let name = th.and_then(|t| t.get("name")).and_then(toml::Value::as_str).unwrap_or("catppuccin");
     let name = name.to_ascii_lowercase().replace([' ', '_'], "-");

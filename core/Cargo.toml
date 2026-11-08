@@ -1,0 +1,19 @@
+[package]
+name = "statetrail-core"
+version = "0.1.0"
+edition = "2024"
+description = "statetrail's host-independent parts: transcripts, quota, rendering, jumping, chapters, search"
+license = "MIT"
+publish = false
+
+[lib]
+name = "statetrail_core"
+
+[dependencies]
+ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
+crossterm = { version = "0.28", default-features = false, features = ["events"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+unicode-width = "0.2"

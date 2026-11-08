@@ -1,22 +1,14 @@
 //! statetrail（herdr 版，Rust）：Claude Code 会话轨迹，停在 Claude 窗格右边。
 //! 子命令和 Python 版 trail.py 一一对应：pane（轨迹窗格本身）、toggle（插件动作）、auto（事件钩子：默认打开）。
 
-mod chapters;
-mod claude;
 mod goto;
-mod header;
 mod herdr;
-mod i18n;
-mod jump;
 mod pane;
-mod picker;
-mod render;
-mod search;
 mod switch;
-mod theme;
 mod tools;
-mod transcript;
-mod ui;
+
+// 和宿主无关的几块在仓库根目录的 core/（tmux 版也用）；这里按原来的模块名引进来，代码里照旧写 crate::claude 这些
+pub use statetrail_core::{chapters, claude, header, i18n, jump, picker, render, search, theme, transcript, ui};
 
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -28,16 +20,7 @@ pub const WIDE_MIN: u16 = 30; // 轨迹窗格（tty）至少这么宽才画宽�
 pub const FRAME: i64 = 2; // herdr 给窗格画的边框：tty 比 pane.layout 的矩形窄 2 列
 pub const CLAUDE_MIN: i64 = 110; // 宽版总要给 Claude 留这么多列
 
-pub fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
-}
-
-pub fn expand(p: &str) -> PathBuf {
-    match p.strip_prefix("~/") {
-        Some(rest) => home().join(rest),
-        None => PathBuf::from(p),
-    }
-}
+pub use statetrail_core::{expand, home};
 
 pub fn plugin_id() -> String {
     std::env::var("HERDR_PLUGIN_ID").unwrap_or_else(|_| "statetrail".into())
@@ -354,7 +337,17 @@ fn cmd_toggle(cfg: &Config) {
     });
 }
 
+/// 颜色跟着 herdr 的主题：herdr 的 config.toml（core 的 theme 第一次要颜色时才读）。
+fn herdr_config() -> Option<toml::Table> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home().join(".config"));
+    std::fs::read_to_string(base.join("herdr/config.toml")).ok().and_then(|s| s.parse().ok())
+}
+
 fn main() {
+    statetrail_core::set_state_dir(state_dir());
+    theme::set_source(herdr_config);
     let cfg = config();
     i18n::init(&cfg.lang);
     header::init_icons(&cfg.icons);

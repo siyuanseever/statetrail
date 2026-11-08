@@ -618,6 +618,20 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
+ "statetrail-core",
+ "toml",
+ "unicode-width 0.2.0",
+]
+
+[[package]]
+name = "statetrail-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "crossterm",
+ "ratatui",
+ "serde",
+ "serde_json",
  "toml",
  "unicode-width 0.2.0",
 ]

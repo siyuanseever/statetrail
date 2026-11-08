@@ -7,7 +7,7 @@ on:
     tags: ["v0.2*", "v0.3*", "v0.4*", "v0.5*", "v0.6*", "v0.7*", "v0.8*", "v0.9*", "v1*"]
     # 推标签时不看 paths
     branches: [rust]
-    paths: ["herdr/**", ".github/workflows/release-rs.yml"]
+    paths: ["herdr/**", "core/**", ".github/workflows/release-rs.yml"]
   workflow_dispatch:
 
 permissions:
