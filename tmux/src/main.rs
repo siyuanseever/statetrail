@@ -104,6 +104,37 @@ pub fn exe() -> PathBuf {
     std::env::current_exe().unwrap_or_else(|_| PathBuf::from("statetrail-tmux"))
 }
 
+/// 程序文件的修改时间：换了新版本（install.sh 编好后改名换上），开着的轨迹和常驻进程据此原地重启
+pub fn exe_mtime() -> Option<std::time::SystemTime> {
+    std::fs::metadata(exe()).and_then(|m| m.modified()).ok()
+}
+
+/// 程序换了（连着两次看到同一份新的，免得装到一半就换），而且新程序跑得起来。seen 记着上次看到的那份。
+pub fn code_changed(start: Option<std::time::SystemTime>, seen: &mut Option<std::time::SystemTime>) -> bool {
+    let now = exe_mtime();
+    if now == start || now.is_none() {
+        *seen = None;
+        return false;
+    }
+    if *seen != now {
+        *seen = now;
+        return false;
+    }
+    std::process::Command::new(exe())
+        .arg("version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// 原地换成新程序（同样的参数）；换不了就返回
+pub fn restart() {
+    use std::os::unix::process::CommandExt;
+    let err = std::process::Command::new(exe()).args(std::env::args().skip(1)).exec();
+    eprintln!("statetrail-tmux: restart failed: {err}");
+}
+
 // ---- 额度：用 claude-tmux-sessions 的读数和刷新脚本，和 tmux 底栏、Python 侧栏同一份 ----
 
 fn live_file(cfg_dir: &Path) -> PathBuf {

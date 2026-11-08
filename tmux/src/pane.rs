@@ -34,6 +34,7 @@ const GIT_EVERY: Duration = Duration::from_secs(10); // Git 按钮后面的数�
 // 读一次屏要起一次 tmux（约 3 毫秒）
 const FOLLOW_EVERY: Duration = Duration::from_millis(500);
 const CLASSIFY_RETRY: Duration = Duration::from_secs(600); // 调 Haiku 分章失败了（没网、没额度）：隔这么久再试
+const CODE_CHECK: Duration = Duration::from_secs(5); // 多久看一眼程序文件换了没有（只 stat 一下）
 const MANUAL_HOLD: Duration = Duration::from_secs(8); // 滚轮 / 键盘挪了选中之后，这么久不跟 Claude 的屏幕
 
 enum Msg {
@@ -118,6 +119,9 @@ struct Trail {
     found_rows: Vec<(u16, usize)>,          // 跨会话结果：屏幕第几行是第几条
     open_sids: HashMap<String, String>,     // 开着的会话：会话 id → Claude 窗格
     goto: Option<(String, Instant)>,        // 别处搜到了这个会话的某一轮（轮次 id）：会话读到它就跳过去
+    code: Option<std::time::SystemTime>,     // 起来时程序文件的修改时间
+    code_new: Option<std::time::SystemTime>,
+    restart: bool,                           // 程序换了：主循环退出后原地换成新程序
     cwd: String,  // Claude 的目录（Git 按钮后面的数字数这里）
     git: Option<usize>,
     next_git: Instant,
@@ -930,6 +934,9 @@ pub fn run(cfg: Config, target: &str) {
         found_rows: Vec::new(),
         open_sids: HashMap::new(),
         goto: None,
+        code: crate::exe_mtime(),
+        code_new: None,
+        restart: false,
         cwd: cwd.to_owned(),
         git: None,
         next_git: Instant::now(),
@@ -957,7 +964,13 @@ pub fn run(cfg: Config, target: &str) {
     let _ = execute!(term.backend_mut(), event::DisableMouseCapture, terminal::LeaveAlternateScreen);
     let _ = terminal::disable_raw_mode();
     s.jump_token.fetch_add(1, Ordering::SeqCst);
+    if s.everywhere {
+        s.set_zoom(false);
+    }
     let _ = std::fs::remove_file(sock_of(&me));
+    if s.restart {
+        crate::restart(); // 原地换成新程序：同一格、同样的参数，位置和宽度都不变
+    }
 }
 
 fn run_loop(
@@ -969,6 +982,7 @@ fn run_loop(
     let mut next_tick = Instant::now() + TICK;
     let mut next_poll = Instant::now();
     let mut next_follow = Instant::now();
+    let mut next_code = Instant::now() + CODE_CHECK;
     let mut redraw = true;
     loop {
         let size = term.size()?;
@@ -1216,7 +1230,7 @@ fn run_loop(
         }
         // 等下一件事
         let now = Instant::now();
-        let mut wake = next_tick.min(next_poll);
+        let mut wake = next_tick.min(next_poll).min(next_code);
         if let Some((_, until)) = &s.flash {
             wake = wake.min(*until);
         }
@@ -1379,6 +1393,13 @@ fn run_loop(
         }
         if !changed && poll_only && timed_out {
             redraw = false;
+        }
+        if now >= next_code {
+            next_code = now + CODE_CHECK;
+            if crate::code_changed(s.code, &mut s.code_new) {
+                s.restart = true;
+                return Ok(());
+            }
         }
         if now >= next_tick {
             next_tick = now + TICK;

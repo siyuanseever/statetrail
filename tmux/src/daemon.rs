@@ -205,9 +205,16 @@ pub fn run(cfg: Config) {
     }
     log(&format!("start {}", env!("CARGO_PKG_VERSION")));
     let mut d = Daemon::default();
+    let (code, mut code_new) = (crate::exe_mtime(), None);
     loop {
         let t0 = Instant::now();
         d.tick(&cfg);
+        if crate::code_changed(code, &mut code_new) {
+            log("new version: restarting");
+            drop(lock); // 放开锁，新程序要拿
+            crate::restart();
+            return;
+        }
         std::thread::sleep(TICK.saturating_sub(t0.elapsed()));
     }
 }
