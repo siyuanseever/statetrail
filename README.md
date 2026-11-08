@@ -11,11 +11,13 @@ Two plugins live in this repository, one per host. Pick the one for where you ru
 | | Where it runs | Install |
 |---|---|---|
 | [`herdr/`](herdr/) | a pane docked to the right of Claude Code in [herdr](https://herdr.dev) | `herdr plugin install siyuanseever/statetrail/herdr` |
+| [`tmux/`](tmux/) | a pane docked to the right of Claude Code in tmux (with [claude-tmux-sessions](https://github.com/siyuanseever/claude-tmux-sessions)) | `tmux/install.sh` |
 | `claude-code/` | inside Claude Code itself | coming soon |
 
-Using tmux instead? The trail started as part of
+The parts that do not depend on the host (transcripts, quota, drawing, jumping, chapters, search) live in [`core/`](core/)
+and are shared by both. The trail started as part of
 [claude-tmux-sessions](https://github.com/siyuanseever/claude-tmux-sessions), a tmux setup for running many Claude
-Code sessions; its sidebar is the tmux version of the same idea.
+Code sessions; `tmux/` replaces its Python + fzf sidebar.
 
 ![Wide trail: chapters on the right, turn 3 selected, Claude scrolled to it](herdr/docs/wide.png)
 
