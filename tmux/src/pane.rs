@@ -30,9 +30,9 @@ const POLL_SEEN: Duration = Duration::from_secs(1); // 看得见时多久 stat �
 const POLL_IDLE: Duration = Duration::from_secs(5); // 没人看时
 const TICK: Duration = Duration::from_secs(60); // 额度旧了没有、倒计时
 const GIT_EVERY: Duration = Duration::from_secs(10); // Git 按钮后面的数字多久数一次（看得见时）
-// 焦点在这一对 Claude / 轨迹上时，多久读一次 Claude 的屏幕、看它停在哪一轮（herdr 版同一个数）。别的轨迹不读：
-// 读一次屏要起一次 tmux（约 3 毫秒）
-const FOLLOW_EVERY: Duration = Duration::from_millis(500);
+// 焦点在这一对上、窗口有了新输出时读一次 Claude 的屏幕，过这么久再读一次（有输出的时间只精确到秒，一秒里的后半截会漏）。
+// 不定时读：读一次要起一次 tmux 客户端，隔一秒冷启动一次约 10 毫秒 CPU
+const FOLLOW_AGAIN: Duration = Duration::from_millis(1200);
 const CLASSIFY_RETRY: Duration = Duration::from_secs(600); // 调 Haiku 分章失败了（没网、没额度）：隔这么久再试
 const CODE_CHECK: Duration = Duration::from_secs(5); // 多久看一眼程序文件换了没有（只 stat 一下）
 const MANUAL_HOLD: Duration = Duration::from_secs(8); // 滚轮 / 键盘挪了选中之后，这么久不跟 Claude 的屏幕
@@ -97,6 +97,8 @@ struct Trail {
     self_focused: bool, // 焦点在轨迹自己身上：你在用键盘挪选中，不跟 Claude 的屏幕（不然 Claude 一输出就把选中抢回去）
     last_screen: u64,   // 上次读到的 Claude 屏幕（哈希）：没变就不用再认
     reveal: bool,       // 选中的那一轮刚被跟着换了：画的时候把它滚进列表的可见范围
+    activity: String,   // 窗口最后一次有输出的时间（常驻进程说的）
+    follow_due: Vec<Instant>, // 什么时候该读 Claude 的屏幕
     manual_until: Option<Instant>, // 刚用滚轮 / 键盘挪过选中：这之前不跟 Claude 的屏幕（Claude 一输出就会把选中抢回去）
     up_at: Option<(usize, usize)>, // 表头里的 ▲：(第几行, 占到第几列)
     down_at: Option<usize>,        // 底部的 ▼：占到第几列
@@ -832,6 +834,7 @@ impl Trail {
         }
         let Some(tr) = &self.tr else { return false };
         let screen = tmux::capture(&self.target);
+        debug(&format!("{} capture", self.me));
         let hash = {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -866,9 +869,16 @@ impl Trail {
 
     /// 常驻进程发来的「这个窗口有没有人在看、焦点在不在这一对上、是不是在轨迹自己身上、Claude 在哪个目录」：
     /// flags 三位，看得见 / 焦点在这一对 / 焦点在轨迹自己
-    fn set_state(&mut self, flags: &str, cwd: &str) {
+    fn set_state(&mut self, flags: &str, activity: &str, cwd: &str) {
+        let was = self.focused;
         self.seen = flags.starts_with('1');
         self.focused = flags.get(1..2) == Some("1");
+        // 刚切过来、或者窗口有了新输出（Claude 在写、你在 Claude 里翻屏）：读一次屏，过一会儿再读一次
+        if self.focused && (!was || activity != self.activity) {
+            let now = Instant::now();
+            self.follow_due = vec![now, now + FOLLOW_AGAIN];
+        }
+        self.activity = activity.to_owned();
         self.self_focused = flags.get(2..3) == Some("1");
         if cwd != self.cwd {
             self.cwd = cwd.to_owned();
@@ -992,6 +1002,8 @@ pub fn run(cfg: Config, target: &str) {
         self_focused: false,
         last_screen: 0,
         reveal: false,
+        activity: String::new(),
+        follow_due: if seen && pa == "1" { vec![Instant::now()] } else { Vec::new() },
         manual_until: None,
         up_at: None,
         down_at: None,
@@ -1063,7 +1075,6 @@ fn run_loop(
 ) -> std::io::Result<()> {
     let mut next_tick = Instant::now() + TICK;
     let mut next_poll = Instant::now();
-    let mut next_follow = Instant::now();
     let mut next_code = Instant::now() + CODE_CHECK;
     let mut redraw = true;
     loop {
@@ -1322,8 +1333,10 @@ fn run_loop(
         if let Some((_, until)) = &s.flash {
             wake = wake.min(*until);
         }
-        if s.focused {
-            wake = wake.min(next_follow);
+        if s.focused
+            && let Some(d) = s.follow_due.iter().min()
+        {
+            wake = wake.min(*d);
         }
         // 只为 stat 一下、读一下屏醒来，什么都没变时不重画（重画要读额度文件）
         let poll_only = wake < next_tick && s.flash.as_ref().is_none_or(|(_, u)| wake < *u);
@@ -1413,10 +1426,17 @@ fn run_loop(
             }
             Ok(Msg::Command(c)) => {
                 debug(&format!("{} cmd {c}", s.me));
-                let parts: Vec<&str> = c.splitn(3, ' ').collect();
+                let parts: Vec<&str> = c.splitn(4, ' ').collect();
                 match parts.as_slice() {
-                    ["state", flags, cwd] => s.set_state(flags, cwd),
-                    ["state", flags] => s.set_state(flags, ""),
+                    // 状态消息本身不重画：重画有输出，窗口「有输出的时间」就变，常驻进程又发一条，每秒都画一遍
+                    ["state", flags, act, cwd] => {
+                        s.set_state(flags, act, cwd);
+                        redraw = false;
+                    }
+                    ["state", flags, act] => {
+                        s.set_state(flags, act, "");
+                        redraw = false;
+                    }
                     ["rescan"] => s.rescan(),
                     // 别的轨迹的跨会话搜索选中了这个会话的一轮
                     ["goto", id] => s.goto = Some(((*id).to_owned(), Instant::now())),
@@ -1473,14 +1493,16 @@ fn run_loop(
                 s.kick_git(tx);
             }
         }
-        if s.focused && now >= next_follow {
-            next_follow = now + FOLLOW_EVERY;
+        if s.focused && s.follow_due.iter().any(|d| *d <= now) {
+            s.follow_due.retain(|d| *d > now);
             changed |= s.follow_screen();
         }
         if s.focused {
             s.classify(tx); // 有没判过的话就去分章（一批分完接着下一批）
         }
-        if !changed && poll_only && timed_out {
+        if changed {
+            redraw = true;
+        } else if poll_only && timed_out {
             redraw = false;
         }
         if now >= next_code {

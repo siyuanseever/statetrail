@@ -4,8 +4,9 @@
 //! - Claude 窗格没了，或者连续 5 秒不是 Claude（正在换账号的不算）：收掉轨迹；轨迹没了，它上面那条命令行也收掉
 //! - 队友（agent teams）在同一个窗口开了窗格：平铺的轨迹先收起来（不记 @trail_off），队友走了自动回来；浮着的不动
 //! - 轨迹和命令行都补上 @resurrect_skip（tmux-resurrect 恢复后不留空壳）
-//! - 告诉每个轨迹它的窗口有没有人在看、焦点在不在这一对上（只有这时它才去读 Claude 的屏幕）、Claude 在哪个目录：
-//!   变了才发，发到它的命令口
+//! - 告诉每个轨迹它的窗口有没有人在看、焦点在不在这一对上、窗口最后一次有输出是什么时候、Claude 在哪个目录：
+//!   变了才发，发到它的命令口。焦点上的轨迹只在「有输出的时间」变了时才去读 Claude 的屏幕，Claude 闲着就一次都不读
+//!   （起一次 tmux 客户端要几毫秒 CPU，隔一秒冷启动一次约 10 毫秒，所以能不起就不起）
 //! 只有一次 list-panes 成功了才动手：一次调用失败（机器很忙时会超时）不会把轨迹关掉。
 
 use std::collections::{HashMap, HashSet};
@@ -18,9 +19,9 @@ use crate::{Config, open, pane, tmux};
 const TICK: Duration = Duration::from_secs(1);
 
 // 用户选项在格式里会一路往上找到全局的（@trail_auto），省一次 tmux show。目录放最后：按制表符切，目录名里就算有制表符也不错位
-const FMT: &str = "#{pane_id}\t#{@trail_for}\t#{window_id}\t#{pane_width}\t#{pane_current_command}\t#{@trail_off}\t\
+pub const FMT: &str = "#{pane_id}\t#{@trail_for}\t#{window_id}\t#{pane_width}\t#{pane_current_command}\t#{@trail_off}\t\
 #{window_active}\t#{session_attached}\t#{@trail_auto}\t#{pane_floating_flag}\t#{@picker_float}\t#{@trail_shell}\t\
-#{@resurrect_skip}\t#{pane_active}\t#{pane_current_path}";
+#{@resurrect_skip}\t#{pane_active}\t#{window_activity}\t#{pane_current_path}";
 
 struct P {
     win: String,
@@ -30,6 +31,7 @@ struct P {
     float: bool,
     seen: bool,
     active: bool,
+    activity: String, // 窗口最后一次有输出的时间（秒）：变了，焦点上的轨迹才去读 Claude 的屏幕
     cwd: String,
 }
 
@@ -65,8 +67,8 @@ impl Daemon {
         let mut mates: HashMap<String, u32> = HashMap::new();
         let mut auto = true;
         for line in out.lines() {
-            let f: Vec<&str> = line.splitn(15, '\t').collect();
-            let [pid, trail_for, win, width, cmd, off, wactive, attached, tauto, floating, pfloat, trail_shell, rskip, pactive, cwd] =
+            let f: Vec<&str> = line.splitn(16, '\t').collect();
+            let [pid, trail_for, win, width, cmd, off, wactive, attached, tauto, floating, pfloat, trail_shell, rskip, pactive, activity, cwd] =
                 f.as_slice()
             else {
                 continue;
@@ -95,6 +97,7 @@ impl Daemon {
                     float: *floating == "1",
                     seen: *wactive == "1" && !matches!(*attached, "" | "0"),
                     active: *pactive == "1",
+                    activity: activity.to_string(),
                     cwd: cwd.to_string(),
                 },
             );
@@ -141,7 +144,14 @@ impl Daemon {
             let shell_active = shells.iter().any(|(sh, o)| o == caller && panes.get(sh).is_some_and(|p| p.active));
             let mine_active = c.active || panes.get(sb).is_some_and(|p| p.active) || shell_active;
             let self_active = c.seen && panes.get(sb).is_some_and(|p| p.active);
-            let msg = format!("state {}{}{} {}", u8::from(c.seen), u8::from(c.seen && mine_active), u8::from(self_active), c.cwd);
+            let msg = format!(
+                "state {}{}{} {} {}",
+                u8::from(c.seen),
+                u8::from(c.seen && mine_active),
+                u8::from(self_active),
+                c.activity,
+                c.cwd
+            );
             if self.sent.get(sb) != Some(&msg) && pane::send_command(sb, &msg) {
                 self.sent.insert(sb.clone(), msg);
             }

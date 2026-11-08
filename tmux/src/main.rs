@@ -188,6 +188,12 @@ fn main() {
         Some("toggle") => open::toggle(&arg(1), &cfg),
         Some("daemon") => daemon::run(cfg),
         Some("pickrepo") => open::cmd_pickrepo(&arg(1)),
+        // 开发用：调 n 次 list-panes（量一次 tmux 调用的开销）
+        Some("bench-tmux") => {
+            for _ in 0..arg(1).parse::<usize>().unwrap_or(50) {
+                let _ = tmux::run(&["list-panes", "-a", "-F", daemon::FMT]);
+            }
+        }
         Some("version") => println!("statetrail-tmux {}", env!("CARGO_PKG_VERSION")),
         // 开发用：一份对话记录切出来的轮次，一行一个 JSON
         Some("dump") => {
