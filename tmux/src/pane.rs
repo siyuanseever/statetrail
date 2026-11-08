@@ -26,6 +26,9 @@ const POLL_SEEN: Duration = Duration::from_secs(1); // 看得见时多久 stat �
 const POLL_IDLE: Duration = Duration::from_secs(5); // 没人看时
 const TICK: Duration = Duration::from_secs(60); // 额度旧了没有、倒计时
 const GIT_EVERY: Duration = Duration::from_secs(10); // Git 按钮后面的数字多久数一次（看得见时）
+// 焦点在这一对 Claude / 轨迹上时，多久读一次 Claude 的屏幕、看它停在哪一轮（herdr 版同一个数）。别的轨迹不读：
+// 读一次屏要起一次 tmux（约 3 毫秒）
+const FOLLOW_EVERY: Duration = Duration::from_millis(500);
 
 enum Msg {
     Input(Event),
@@ -80,6 +83,9 @@ struct Trail {
     follow: bool, // 停在最底：列表变长时跟着走
     seen: bool,   // 这个窗口正被看着（常驻进程说的）
     focused: bool, // 焦点在这个 Claude / 轨迹上（只有这时才去读 Claude 的屏幕）
+    self_focused: bool, // 焦点在轨迹自己身上：你在用键盘挪选中，不跟 Claude 的屏幕（不然 Claude 一输出就把选中抢回去）
+    last_screen: u64,   // 上次读到的 Claude 屏幕（哈希）：没变就不用再认
+    reveal: bool,       // 选中的那一轮刚被跟着换了：画的时候把它滚进列表的可见范围
     cwd: String,  // Claude 的目录（Git 按钮后面的数字数这里）
     git: Option<usize>,
     next_git: Instant,
@@ -309,10 +315,53 @@ impl Trail {
         });
     }
 
-    /// 常驻进程发来的「这个窗口有没有人在看、焦点在不在这一对上、Claude 在哪个目录」：flags 两位，看得见 / 焦点在这
+    /// 读一次 Claude 的屏幕，看它停在哪一轮，把选中挪过去（herdr 版 follow_screen 一样的认法）：在最底就是最新一轮；
+    /// 往上翻着就是屏幕上最上面露出开头的那一轮，它的开头已经在屏幕下半截时算上一轮（你看的多半是上一轮的结尾）；
+    /// 一轮的开头都没露出来（长回复的中段）就不动。选中换了返回 true。
+    fn follow_screen(&mut self) -> bool {
+        if self.self_focused || self.jumping_until.is_some_and(|t| Instant::now() < t) {
+            return false;
+        }
+        let Some(tr) = &self.tr else { return false };
+        let screen = tmux::capture(&self.target);
+        let hash = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            screen.hash(&mut h);
+            h.finish()
+        };
+        if screen.is_empty() || std::mem::replace(&mut self.last_screen, hash) == hash {
+            return false;
+        }
+        let stops = tr.visible();
+        let Some(last) = stops.len().checked_sub(1) else { return false };
+        let idx = if jump::at_bottom(&screen) {
+            Some(last)
+        } else {
+            let replies: Vec<&str> = stops.iter().map(|s| s.reply.as_str()).collect();
+            let half = screen.lines().count() / 2;
+            jump::located_rows(&screen, &jump::needles_of(&replies))
+                .into_iter()
+                .min_by_key(|&(_, row)| row)
+                .map(|(i, row)| if row > half && i > 0 { i - 1 } else { i })
+        };
+        debug(&format!("{} follow -> {idx:?} (bottom {})", self.me, jump::at_bottom(&screen)));
+        let Some(i) = idx else { return false };
+        if self.opened.as_deref() == Some(stops[i].id.as_str()) {
+            return false;
+        }
+        self.opened = Some(stops[i].id.clone());
+        self.follow = i == last;
+        self.reveal = true;
+        true
+    }
+
+    /// 常驻进程发来的「这个窗口有没有人在看、焦点在不在这一对上、是不是在轨迹自己身上、Claude 在哪个目录」：
+    /// flags 三位，看得见 / 焦点在这一对 / 焦点在轨迹自己
     fn set_state(&mut self, flags: &str, cwd: &str) {
         self.seen = flags.starts_with('1');
         self.focused = flags.get(1..2) == Some("1");
+        self.self_focused = flags.get(2..3) == Some("1");
         if cwd != self.cwd {
             self.cwd = cwd.to_owned();
             self.next_git = Instant::now();
@@ -401,6 +450,9 @@ pub fn run(cfg: Config, target: &str) {
         follow: true,
         seen,
         focused: seen && pa == "1",
+        self_focused: false,
+        last_screen: 0,
+        reveal: false,
         cwd: cwd.to_owned(),
         git: None,
         next_git: Instant::now(),
@@ -439,6 +491,7 @@ fn run_loop(
 ) -> std::io::Result<()> {
     let mut next_tick = Instant::now() + TICK;
     let mut next_poll = Instant::now();
+    let mut next_follow = Instant::now();
     let mut redraw = true;
     loop {
         let size = term.size()?;
@@ -493,6 +546,18 @@ fn run_loop(
                 s.offset = bottom;
             }
             s.offset = s.offset.min(bottom);
+            // 选中换了（跟着 Claude 的屏幕）：不在露出来的范围里就滚到刚好整个露出来
+            if std::mem::take(&mut s.reveal)
+                && let Some(k) = items.iter().position(|&it| view.selected(it))
+            {
+                if k < s.offset {
+                    s.offset = k;
+                }
+                while s.offset < bottom && s.offset < k && !ui::fits(&view, &items, s.offset, k, rows, room) {
+                    s.offset += 1;
+                }
+                s.follow = s.offset >= bottom;
+            }
             s.view = ui::view_counts(&view, &ui::visible(&view, &items, s.offset, rows, room));
             let footer: Vec<render::SLine> = Vec::new();
             let mut drawn = None;
@@ -511,8 +576,11 @@ fn run_loop(
         if let Some((_, until)) = &s.flash {
             wake = wake.min(*until);
         }
-        // 只为 stat 一下醒来、什么都没变时不重画（重画要读额度文件）
-        let poll_only = next_poll < next_tick && s.flash.as_ref().is_none_or(|(_, u)| next_poll < *u);
+        if s.focused {
+            wake = wake.min(next_follow);
+        }
+        // 只为 stat 一下、读一下屏醒来，什么都没变时不重画（重画要读额度文件）
+        let poll_only = wake < next_tick && s.flash.as_ref().is_none_or(|(_, u)| wake < *u);
         let msg = rx.recv_timeout(wake.saturating_duration_since(now));
         let timed_out = matches!(msg, Err(mpsc::RecvTimeoutError::Timeout));
         match msg {
@@ -585,15 +653,20 @@ fn run_loop(
             Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
         }
         let now = Instant::now();
+        let mut changed = false;
         if now >= next_poll {
             next_poll = now + if s.seen { POLL_SEEN } else { POLL_IDLE };
-            let changed = s.refresh();
+            changed |= s.refresh();
             if s.seen {
                 s.kick_git(tx);
             }
-            if !changed && poll_only && timed_out {
-                redraw = false;
-            }
+        }
+        if s.focused && now >= next_follow {
+            next_follow = now + FOLLOW_EVERY;
+            changed |= s.follow_screen();
+        }
+        if !changed && poll_only && timed_out {
+            redraw = false;
         }
         if now >= next_tick {
             next_tick = now + TICK;

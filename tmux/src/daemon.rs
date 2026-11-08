@@ -140,7 +140,8 @@ impl Daemon {
             // 焦点在这一对上：窗口看得见，活动窗格是 Claude、轨迹或它上面那条命令行
             let shell_active = shells.iter().any(|(sh, o)| o == caller && panes.get(sh).is_some_and(|p| p.active));
             let mine_active = c.active || panes.get(sb).is_some_and(|p| p.active) || shell_active;
-            let msg = format!("state {}{} {}", u8::from(c.seen), u8::from(c.seen && mine_active), c.cwd);
+            let self_active = c.seen && panes.get(sb).is_some_and(|p| p.active);
+            let msg = format!("state {}{}{} {}", u8::from(c.seen), u8::from(c.seen && mine_active), u8::from(self_active), c.cwd);
             if self.sent.get(sb) != Some(&msg) && pane::send_command(sb, &msg) {
                 self.sent.insert(sb.clone(), msg);
             }
