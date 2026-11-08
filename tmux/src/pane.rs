@@ -16,6 +16,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
 
+use crate::chapters::{self, Chapter, Marks};
 use crate::header::{self, Button};
 use crate::i18n::t;
 use crate::jump::{self, Outcome, Term};
@@ -30,6 +31,7 @@ const GIT_EVERY: Duration = Duration::from_secs(10); // Git 按钮后面的数�
 // 焦点在这一对 Claude / 轨迹上时，多久读一次 Claude 的屏幕、看它停在哪一轮（herdr 版同一个数）。别的轨迹不读：
 // 读一次屏要起一次 tmux（约 3 毫秒）
 const FOLLOW_EVERY: Duration = Duration::from_millis(500);
+const CLASSIFY_RETRY: Duration = Duration::from_secs(600); // 调 Haiku 分章失败了（没网、没额度）：隔这么久再试
 const MANUAL_HOLD: Duration = Duration::from_secs(8); // 滚轮 / 键盘挪了选中之后，这么久不跟 Claude 的屏幕
 
 enum Msg {
@@ -38,6 +40,7 @@ enum Msg {
     Flash(String, Duration),
     Jumped(String, String), // (轮次 id，用逗号连着, 结果)
     Git(Option<usize>),
+    Classified(bool), // 后台分完一批章（成功没有）：重读分章文件
     Wake,
 }
 
@@ -93,6 +96,15 @@ struct Trail {
     down_at: Option<usize>,        // 底部的 ▼：占到第几列
     footer_top: u16,
     last_wide: Option<i64>, // 切到窄版之前的宽度：切回宽版时回到它
+    marks: Marks,           // 这个会话哪几轮开新章（core 的 chapters）
+    chaps: Vec<Chapter>,    // 上一帧切出来的章（点击时按它认）
+    chap_open: Vec<bool>,   // 上一帧每一章展没展开
+    outline: bool,          // 在章那一层：所有章收着，选中按章挪（← 进来，→ / Enter 出去）
+    reveal_top: bool,       // 刚从章那一层进到一章：画的时候把这一章的章名顶到列表最上面
+    classifying: bool,      // 正在后台调 Haiku 分章
+    next_classify: Instant,
+    menu: Option<ui::Menu>, // 开着的右键菜单
+    menu_hits: Vec<(u16, u16, u16, String)>,
     cwd: String,  // Claude 的目录（Git 按钮后面的数字数这里）
     git: Option<usize>,
     next_git: Instant,
@@ -139,6 +151,8 @@ impl Trail {
             self.expanded = false;
             self.missing.clear();
             self.follow = true;
+            self.outline = false;
+            self.marks = self.sid.as_deref().map(Marks::load).unwrap_or_default();
             self.rescan();
             changed = true;
         }
@@ -278,18 +292,116 @@ impl Trail {
         let Some(tr) = &self.tr else { return };
         let stops = tr.visible();
         let Some(last) = stops.len().checked_sub(1) else { return };
-        // 收着的「已压缩」那几轮挪不进去：列表里没有它们
-        let cells: Vec<usize> = (0..=last).filter(|&i| self.expanded || !stops[i].compacted).collect();
+        // 章那一层一章一格（选中记成它的第一轮）；轮那一层一轮一格，挪进别的章那一章就展开、原来那章收起。
+        // 不分章时收着的「已压缩」那几轮挪不进去：列表里没有它们
+        let cells: Vec<std::ops::Range<usize>> = if self.outline && !self.chaps.is_empty() {
+            self.chaps.iter().map(|c| c.start..c.end.min(last + 1)).collect()
+        } else if self.chaps.is_empty() && !self.expanded {
+            (0..=last).filter(|&i| !stops[i].compacted).map(|i| i..i + 1).collect()
+        } else {
+            (0..=last).map(|i| i..i + 1).collect()
+        };
         if cells.is_empty() {
             return;
         }
         let cur = stops.iter().position(|st| Some(st.id.as_str()) == self.opened.as_deref()).unwrap_or(last);
-        let at = cells.iter().position(|&i| i >= cur).unwrap_or(cells.len() - 1);
+        let at = cells.iter().position(|r| r.contains(&cur) || r.start > cur).unwrap_or(cells.len() - 1);
         let to = at.saturating_add_signed(d).min(cells.len() - 1);
-        self.opened = Some(stops[cells[to]].id.clone());
+        self.opened = Some(stops[cells[to].start].id.clone());
         self.reveal = true;
         self.follow = to == cells.len() - 1;
         self.manual_until = Some(Instant::now() + MANUAL_HOLD);
+    }
+
+    /// 在章和轮两层之间来回（herdr 版用户 2026-10-29：「在层级之间来回跳转选择」）。← 选中跳到当前这一轮所在的章名，
+    /// ↑↓ 按章挪，选中的那一章照样展开；→ / Enter 进到这一章，选中它的第一轮，章名顶到最上面。
+    fn outline(&mut self, up: bool) -> bool {
+        if self.chaps.is_empty() || self.outline == up {
+            return false;
+        }
+        self.outline = up;
+        if up {
+            self.reveal = true;
+        } else {
+            let Some(tr) = &self.tr else { return false };
+            let stops = tr.visible();
+            let cur = stops.iter().position(|st| Some(st.id.as_str()) == self.opened.as_deref());
+            if let Some(c) = cur.and_then(|i| self.chaps.iter().find(|c| (c.start..c.end).contains(&i))) {
+                self.opened = stops.get(c.start).map(|st| st.id.clone());
+            }
+            self.reveal_top = true;
+        }
+        self.follow = false;
+        self.manual_until = Some(Instant::now() + MANUAL_HOLD);
+        true
+    }
+
+    /// 后台让 Haiku 判断还没判过的话哪几句开新章。只在焦点在这一对上时做：没看的会话不花额度。
+    fn classify(&mut self, tx: &Sender<Msg>) {
+        if self.cfg.chapters != "auto" || self.classifying || Instant::now() < self.next_classify {
+            return;
+        }
+        let (Some(sid), Some(tr)) = (self.sid.clone(), &self.tr) else { return };
+        let stops = tr.visible();
+        let new: Vec<usize> = self.marks.pending(&stops).into_iter().take(chapters::BATCH).collect();
+        if new.is_empty() {
+            return;
+        }
+        let Some(lock) = chapters::Lock::take() else {
+            self.next_classify = Instant::now() + Duration::from_secs(5); // 别的轨迹在调：等一会儿
+            return;
+        };
+        let input = chapters::request(&self.marks, &stops, &new);
+        let ids: Vec<(usize, String)> = new.iter().map(|&i| (i, stops[i].id.clone())).collect();
+        let (cfg_dir, tx) = (self.cfg_dir.clone(), tx.clone());
+        self.classifying = true;
+        std::thread::spawn(move || {
+            let t0 = Instant::now();
+            let r = chapters::ask(&cfg_dir, &input).and_then(|out| chapters::parse(&out, &new));
+            chapters::log(&sid, new.len(), &r, t0.elapsed().as_secs_f64());
+            if let Ok(found) = &r {
+                chapters::merge(&sid, found, &ids);
+            }
+            drop(lock);
+            let _ = tx.send(Msg::Classified(r.is_ok()));
+        });
+    }
+
+    /// 在一轮 / 一章的章名上右键：从这一轮开新章，或者把这一章并回上一章
+    fn chapter_menu(&mut self, it: Item, x: u16, y: u16) {
+        let Some(tr) = &self.tr else { return };
+        let stops = tr.visible();
+        let (i, starts) = match it {
+            Item::Chapter(ci) => match self.chaps.get(ci) {
+                Some(c) => (c.start, true),
+                None => return,
+            },
+            Item::Stop(i) => (i, self.chaps.iter().any(|c| c.start == i)),
+            Item::Fold => return,
+        };
+        if i == 0 || i >= stops.len() {
+            return; // 第一轮总是第一章的开头
+        }
+        let (key, label) = if starts {
+            (format!("chap join {}", stops[i].id), t("并回上一章"))
+        } else {
+            (format!("chap new {}", stops[i].id), t("这里开新章"))
+        };
+        self.menu = Some(ui::Menu { x, y, items: vec![(key, label, false)] });
+    }
+
+    /// 菜单里点了一项
+    fn apply_menu(&mut self, key: &str, _tx: &Sender<Msg>) {
+        if let Some(("chap", value)) = key.split_once(' ') {
+            // 手动标的记进分章文件，盖过 Haiku 的判断（重新读一遍再写：另一个轨迹可能刚写过）
+            if let (Some(sid), Some((how, id))) = (self.sid.clone(), value.split_once(' ')) {
+                let mut m = Marks::load(&sid);
+                m.manual.insert(id.to_owned(), how == "new");
+                m.save(&sid);
+                self.marks = m;
+            }
+            self.focus_claude(); // 右键会把焦点给轨迹（tmux 默认的右键先 select-pane）
+        }
     }
 
     /// 点 ▲ / ▼：翻一屏的轮数，少翻一项留一轮重叠（边上那一轮常常只露出半截）
@@ -315,6 +427,13 @@ impl Trail {
             KeyCode::PageDown => self.move_sel(page),
             KeyCode::Home | KeyCode::Char('g') => self.move_sel(isize::MIN / 2),
             KeyCode::End | KeyCode::Char('G') => self.move_sel(isize::MAX / 2),
+            KeyCode::Left | KeyCode::Char('h') => return self.outline(true),
+            KeyCode::Right | KeyCode::Char('l') => return self.outline(false),
+            KeyCode::Enter if self.outline => return self.outline(false),
+            KeyCode::Esc if self.menu.is_some() => {
+                self.menu = None;
+                self.menu_hits.clear();
+            }
             KeyCode::Enter => {
                 let Some(tr) = &self.tr else { return false };
                 let stops = tr.visible();
@@ -554,6 +673,15 @@ pub fn run(cfg: Config, target: &str) {
         down_at: None,
         footer_top: u16::MAX,
         last_wide: None,
+        marks: Marks::default(),
+        chaps: Vec::new(),
+        chap_open: Vec::new(),
+        outline: false,
+        reveal_top: false,
+        classifying: false,
+        next_classify: Instant::now(),
+        menu: None,
+        menu_hits: Vec::new(),
         cwd: cwd.to_owned(),
         git: None,
         next_git: Instant::now(),
@@ -605,6 +733,13 @@ fn run_loop(
             let usage = claude::read_usage(&s.cfg_dir, s.sid.as_deref(), s.cfg.live_usage);
             let stops = s.tr.as_ref().map(|t| t.visible()).unwrap_or_default();
             let none = HashSet::new();
+            let chaps = if s.cfg.chapters == "off" { Vec::new() } else { s.marks.chapters(&stops) };
+            // 同时只展开一章：选中的那一轮所在的章，别的章都收着（herdr 版用户 2026-10-29 定的）。没选中时算最新一轮
+            let sel = stops
+                .iter()
+                .position(|st| Some(st.id.as_str()) == s.opened.as_deref())
+                .unwrap_or(stops.len().saturating_sub(1));
+            let chap_open: Vec<bool> = chaps.iter().map(|c| (c.start..c.end).contains(&sel)).collect();
             let view = ui::View {
                 stops: &stops,
                 narrow,
@@ -612,10 +747,10 @@ fn run_loop(
                 opened: s.opened.as_deref(),
                 busy: s.busy(),
                 missing: if s.missing.is_empty() { &none } else { &s.missing },
-                chapters: &[],
-                open: &[],
+                chapters: &chaps,
+                open: &chap_open,
                 query: "",
-                outline: false,
+                outline: s.outline && !chaps.is_empty(),
             };
             let items = view.items();
             let room = size.width.saturating_sub(2) as usize;
@@ -650,13 +785,27 @@ fn run_loop(
                 }
                 s.offset = s.offset.min(bottom);
                 // 选中换了（跟着 Claude 的屏幕、滚轮、键盘）：不在露出来的范围里就滚到刚好整个露出来，一轮一轮挪时列表也一轮一轮走
-                if s.reveal
+                // 往上出了范围时连它头上的章名一起露出来；刚进到一章时章名顶到最上面
+                let head_of = |k: usize| if k > 0 && matches!(items[k - 1], Item::Chapter(_)) { k - 1 } else { k };
+                if s.reveal_top
+                    && let Some(k) = items.iter().position(|&it| view.selected(it))
+                {
+                    s.offset = head_of(k).min(bottom);
+                    s.follow = s.offset >= bottom;
+                } else if s.reveal
                     && let Some(k) = items.iter().position(|&it| view.selected(it))
                 {
                     if k < s.offset {
-                        s.offset = k;
+                        s.offset = head_of(k);
                     }
-                    while s.offset < bottom && s.offset < k && !ui::fits(&view, &items, s.offset, k, rows, room) {
+                    // 在章那一层选中的是章名：连它展开的轮次一起露出来，放不下就章名顶到最上面
+                    let mut end = k;
+                    if view.outline {
+                        while matches!(items.get(end + 1), Some(Item::Stop(_))) {
+                            end += 1;
+                        }
+                    }
+                    while s.offset < bottom && s.offset < k && !ui::fits(&view, &items, s.offset, end, rows, room) {
                         s.offset += 1;
                     }
                     s.follow = s.offset >= bottom;
@@ -674,7 +823,10 @@ fn run_loop(
                 foot_len = want;
             }
             s.reveal = false;
+            s.reveal_top = false;
             s.view = counts;
+            s.chaps = chaps.clone();
+            s.chap_open = chap_open.clone();
             let tag = |arrow: &str, n: usize| {
                 if n > 0 {
                     format!("{arrow}{}{n}", if narrow { "" } else { " " })
@@ -701,9 +853,14 @@ fn run_loop(
             };
             s.down_at = (slot > 0 && counts.1 > 0).then_some(slot);
             let mut drawn = None;
+            let mut menu_hits = Vec::new();
             term.draw(|f| {
                 drawn = Some(ui::draw(f, &head, &footer, &view, s.offset));
+                if let Some(m) = &s.menu {
+                    menu_hits = ui::draw_menu(f, m, None);
+                }
             })?;
+            s.menu_hits = menu_hits;
             if let Some(d) = drawn {
                 s.hits = d.hits;
                 s.header_len = d.list_top.saturating_sub(1);
@@ -725,6 +882,28 @@ fn run_loop(
         let timed_out = matches!(msg, Err(mpsc::RecvTimeoutError::Timeout));
         match msg {
             Ok(Msg::Input(Event::Mouse(m))) => match m.kind {
+                MouseEventKind::Down(_) if s.menu.is_some() => {
+                    // 菜单开着：点中一项就去办，点哪儿都先把菜单收起来
+                    let hit = s
+                        .menu_hits
+                        .iter()
+                        .find(|(r, a, b, _)| *r == m.row && (*a..*b).contains(&m.column))
+                        .map(|h| h.3.clone());
+                    s.menu = None;
+                    s.menu_hits.clear();
+                    match hit {
+                        Some(k) => s.apply_menu(&k, tx),
+                        None => s.focus_claude(),
+                    }
+                }
+                MouseEventKind::Down(MouseButton::Right) if s.cfg.chapters != "off" => {
+                    if let Some(&(_, it)) = s.hits.iter().find(|(row, _)| *row == m.row) {
+                        s.chapter_menu(it, m.column, m.row + 1);
+                    }
+                    if s.menu.is_none() {
+                        s.focus_claude();
+                    }
+                }
                 MouseEventKind::ScrollUp => s.move_sel(-1),
                 MouseEventKind::ScrollDown => s.move_sel(1),
                 MouseEventKind::Down(MouseButton::Left) if m.row >= s.footer_top => {
@@ -744,7 +923,21 @@ fn run_loop(
                                 s.opened = s.tr.as_ref().map(|t| t.visible()[i].id.clone());
                                 s.jump(i, tx);
                             }
-                            Item::Chapter(_) => {}
+                            Item::Chapter(ci) => {
+                                if let (Some(c), Some(tr)) = (s.chaps.get(ci), &s.tr) {
+                                    // 轮那一层点展开着的那一章 = 退到章那一层；点别的章、或者在章那一层点章名 = 进到那一章、选中它的第一轮
+                                    if !s.outline && s.chap_open.get(ci) == Some(&true) {
+                                        s.outline = true;
+                                        s.reveal = true;
+                                    } else {
+                                        s.opened = tr.visible().get(c.start).map(|st| st.id.clone());
+                                        s.outline = false;
+                                        s.reveal_top = true;
+                                    }
+                                    s.follow = false;
+                                    s.manual_until = Some(Instant::now() + MANUAL_HOLD);
+                                }
+                            }
                         }
                     }
                 }
@@ -777,6 +970,16 @@ fn run_loop(
             }
             Ok(Msg::Flash(m, d)) => s.say(m, d),
             Ok(Msg::Wake) => {}
+            Ok(Msg::Classified(ok)) => {
+                s.classifying = false;
+                if ok {
+                    if let Some(sid) = &s.sid {
+                        s.marks = Marks::load(sid);
+                    }
+                } else {
+                    s.next_classify = Instant::now() + CLASSIFY_RETRY;
+                }
+            }
             Ok(Msg::Git(n)) => {
                 if n == s.git {
                     redraw = false;
@@ -809,6 +1012,9 @@ fn run_loop(
         if s.focused && now >= next_follow {
             next_follow = now + FOLLOW_EVERY;
             changed |= s.follow_screen();
+        }
+        if s.focused {
+            s.classify(tx); // 有没判过的话就去分章（一批分完接着下一批）
         }
         if !changed && poll_only && timed_out {
             redraw = false;
