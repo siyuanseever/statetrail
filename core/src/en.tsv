@@ -139,3 +139,7 @@ Esc 清掉搜索	Esc clears
 停掉的后台任务没能告诉它，请自己提醒它重挂	could not tell it about the stopped background tasks; remind it yourself
 停在按 ← 进的会话列表里，按 esc 没回到对话，没动	stuck in the ← session list; esc did not return to the conversation; left alone
 它按 ← 移到后台过，但没找到那个后台会话，没动	it was moved to the background with ←, but that background session was not found; left alone
+# tmux 版（tmux/）
+不在 git 仓库里，下面两层也没有仓库	Not a git repo, and none two levels down
+开不了新窗口	Could not open a new window
+额度只读现有读数；要实时查询，在配置里设 live_usage = true	Quota is read from existing readings; set live_usage = true to query live
