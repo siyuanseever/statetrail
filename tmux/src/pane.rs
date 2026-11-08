@@ -79,6 +79,7 @@ struct Trail {
     offset: usize,
     follow: bool, // 停在最底：列表变长时跟着走
     seen: bool,   // 这个窗口正被看着（常驻进程说的）
+    focused: bool, // 焦点在这个 Claude / 轨迹上（只有这时才去读 Claude 的屏幕）
     cwd: String,  // Claude 的目录（Git 按钮后面的数字数这里）
     git: Option<usize>,
     next_git: Instant,
@@ -308,9 +309,10 @@ impl Trail {
         });
     }
 
-    /// 常驻进程发来的「这个窗口有没有人在看、Claude 在哪个目录」
-    fn set_state(&mut self, seen: bool, cwd: &str) {
-        self.seen = seen;
+    /// 常驻进程发来的「这个窗口有没有人在看、焦点在不在这一对上、Claude 在哪个目录」：flags 两位，看得见 / 焦点在这
+    fn set_state(&mut self, flags: &str, cwd: &str) {
+        self.seen = flags.starts_with('1');
+        self.focused = flags.get(1..2) == Some("1");
         if cwd != self.cwd {
             self.cwd = cwd.to_owned();
             self.next_git = Instant::now();
@@ -357,6 +359,18 @@ fn spawn_threads(tx: &Sender<Msg>, me: &str) {
     }
 }
 
+/// STATETRAIL_DEBUG=1 时往状态目录的 debug.log 记一行（开发用）
+fn debug(line: &str) {
+    if std::env::var_os("STATETRAIL_DEBUG").is_some()
+        && let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(crate::state_dir().join("debug.log"))
+    {
+        let _ = writeln!(f, "{} {line}", chrono::Local::now().format("%T%.3f"));
+    }
+}
+
 pub fn run(cfg: Config, target: &str) {
     let _ = event::poll(Duration::ZERO); // 先装上窗口大小变化的信号处理
     let me = std::env::var("TMUX_PANE").unwrap_or_default();
@@ -365,8 +379,10 @@ pub fn run(cfg: Config, target: &str) {
         std::process::exit(2);
     }
     // 起来时自己问一次「有没有人在看、Claude 在哪个目录」，之后由常驻进程告诉它
-    let probe = tmux::display(target, "#{window_active}#{session_attached} #{pane_current_path}").unwrap_or_default();
-    let (flags, cwd) = probe.split_once(' ').unwrap_or(("", ""));
+    let probe = tmux::display(target, "#{window_active} #{session_attached} #{pane_active} #{pane_current_path}").unwrap_or_default();
+    let mut f = probe.splitn(4, ' ');
+    let (wa, att, pa, cwd) = (f.next().unwrap_or(""), f.next().unwrap_or(""), f.next().unwrap_or(""), f.next().unwrap_or(""));
+    let seen = wa == "1" && !matches!(att, "" | "0");
     let mut s = Trail {
         target: target.to_owned(),
         me: me.clone(),
@@ -383,7 +399,8 @@ pub fn run(cfg: Config, target: &str) {
         flash: None,
         offset: 0,
         follow: true,
-        seen: flags.starts_with('1') && !flags.ends_with('0'),
+        seen,
+        focused: seen && pa == "1",
         cwd: cwd.to_owned(),
         git: None,
         next_git: Instant::now(),
@@ -535,10 +552,11 @@ fn run_loop(
                 continue;
             }
             Ok(Msg::Command(c)) => {
+                debug(&format!("{} cmd {c}", s.me));
                 let parts: Vec<&str> = c.splitn(3, ' ').collect();
                 match parts.as_slice() {
-                    ["state", seen, cwd] => s.set_state(*seen == "1", cwd),
-                    ["state", seen] => s.set_state(*seen == "1", ""),
+                    ["state", flags, cwd] => s.set_state(flags, cwd),
+                    ["state", flags] => s.set_state(flags, ""),
                     ["rescan"] => s.rescan(),
                     ["quit"] => return Ok(()),
                     _ => {}
