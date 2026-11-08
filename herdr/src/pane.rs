@@ -1597,6 +1597,8 @@ fn run_loop(
                 flash: s.flash.as_ref().map(|(m, _)| m.as_str()),
                 up_tag: "",
                 slot: 0,
+                buttons: None,
+                git: None,
             };
             let head_len = if narrow {
                 header::narrow(size.width as usize, &info).len()

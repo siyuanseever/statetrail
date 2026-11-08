@@ -135,6 +135,11 @@ pub fn cells_w(buttons: &[Button]) -> usize {
 }
 
 pub fn buttons_line(buttons: &[Button], u: Option<&Usage>, usage_known: bool) -> SLine {
+    buttons_line_with(buttons, u, usage_known, None)
+}
+
+/// 同上，再加 git 按钮后面那一小段：这个目录里有几个文件没提交（tmux 版的 Git 按钮，和 Python 侧栏一样）。不是仓库 / 都提交了就空着。
+pub fn buttons_line_with(buttons: &[Button], u: Option<&Usage>, usage_known: bool, git: Option<usize>) -> SLine {
     let mut out: SLine = Vec::new();
     for (k, (text, act, extra)) in buttons.iter().enumerate() {
         if k > 0 {
@@ -148,6 +153,13 @@ pub fn buttons_line(buttons: &[Button], u: Option<&Usage>, usage_known: bool) ->
                 render::usage_state(u)
             } else {
                 (String::new(), None)
+            };
+            out.extend(render::fit(st, *extra));
+        }
+        if act == "git" && *extra > 0 {
+            let st = match git {
+                Some(n) if n > 0 => (if n < 100 { n.to_string() } else { "99+".into() }, Some(colors().warn)),
+                _ => (String::new(), None),
             };
             out.extend(render::fit(st, *extra));
         }
@@ -179,6 +191,8 @@ pub struct Info<'a> {
     pub flash: Option<&'a str>,
     pub up_tag: &'a str, // 「▲ 73」：列表上面还有几轮（到头了是空的）
     pub slot: usize,     // ▲ / ▼ 在行首占几列（一屏放得下就是 0）
+    pub buttons: Option<&'a [Vec<Button>]>, // 表头最上面的几行按钮；None = herdr 版那一行（wide_buttons / narrow_buttons）
+    pub git: Option<usize>,                 // Git 按钮后面写的没提交的文件数（按钮带了额外宽度才写）
 }
 
 /// 宽版表头；第二个值是「N 轮」那一行是第几行（从 1 数，点它什么都不做）。
@@ -201,7 +215,9 @@ pub fn wide(width: usize, i: &Info) -> (Vec<SLine>, usize) {
     } else {
         head_line.push((head, None));
     }
-    let mut lines = vec![buttons_line(&wide_buttons(), i.usage, true)];
+    let rows = i.buttons.map_or_else(|| vec![wide_buttons()], <[Vec<Button>]>::to_vec);
+    let mut lines: Vec<SLine> = rows.iter().map(|r| buttons_line_with(r, i.usage, true, i.git)).collect();
+    let first = lines.len(); // 模型 · 账号那一行
     let acct = claude::current_account(i.cfg_dir);
     // 模型名和 effort 中间空一格分开（Opus 5.5 high），斜线就不要了；只显示不能点
     let model = i.model.replacen('/', " ", 1);
@@ -214,7 +230,7 @@ pub fn wide(width: usize, i: &Info) -> (Vec<SLine>, usize) {
         claude::auto_compact_at(),
     ));
     if !i.model.is_empty() || !acct.is_empty() {
-        lines[1].push((format!(" {}", icon("switch")), Some(c.accent))); // 模型 · 账号那一行
+        lines[first].push((format!(" {}", icon("switch")), Some(c.accent))); // 模型 · 账号那一行
     }
     lines.push(render::lead(head_line, i.up_tag, i.slot)); // 「N 轮」那一行放在最后，▲ 在它最前面
     let n = lines.len();
@@ -225,8 +241,8 @@ pub fn wide(width: usize, i: &Info) -> (Vec<SLine>, usize) {
 pub fn narrow(width: usize, i: &Info) -> Vec<SLine> {
     let c = colors();
     let room = 4.max(width.saturating_sub(2));
-    let first = buttons_line(&narrow_buttons(), None, false);
-    let mut lines = vec![first];
+    let rows = i.buttons.map_or_else(|| vec![narrow_buttons()], <[Vec<Button>]>::to_vec);
+    let mut lines: Vec<SLine> = rows.iter().map(|r| buttons_line_with(r, None, false, i.git)).collect();
     // 提示原文按宽度折到按钮下面，最多三行（以前只画一个「!」，看不出为什么没反应）
     if let Some(msg) = i.flash {
         let mut row = String::new();
@@ -306,8 +322,13 @@ pub fn plain_lines(lines: &[SLine]) -> String {
 
 /// 表头里点了弹账号菜单的那段字：(第几行，从 0 数, 列起, 列止)。账号名到行尾（连 ⇄），按字找，宽版、窄版都一样。
 pub fn hot_spots(lines: &[SLine], accts: &[String]) -> Vec<(usize, usize, usize)> {
+    hot_spots_after(lines, accts, 1)
+}
+
+/// 同上，最上面 skip 行是按钮（tmux 版的按钮可以有两行）。
+pub fn hot_spots_after(lines: &[SLine], accts: &[String], skip: usize) -> Vec<(usize, usize, usize)> {
     let mut out = Vec::new();
-    for (i, l) in lines.iter().enumerate().skip(1) {
+    for (i, l) in lines.iter().enumerate().skip(skip) {
         let p = render::plain(l);
         if let Some(b) = accts.iter().filter(|a| !a.is_empty()).find_map(|a| p.find(a.as_str())) {
             out.push((i, p[..b].width(), p.width()));

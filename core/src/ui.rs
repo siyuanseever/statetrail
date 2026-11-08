@@ -422,8 +422,9 @@ pub fn draw(f: &mut Frame, header: &[SLine], footer: &[SLine], v: &View, offset:
     let top = sep_y + 1;
     let foot_h = footer.len() as u16;
     let footer_top = (area.y + area.height).saturating_sub(foot_h);
-    let rows = footer_top.saturating_sub(1).saturating_sub(top) as usize; // 底部上面还有一条分隔线
-    if footer_top > top {
+    // 底部上面还有一条分隔线；没有底部（tmux 版列表下面什么都不放时）就不画这条线，列表画到最底
+    let rows = footer_top.saturating_sub(u16::from(foot_h > 0)).saturating_sub(top) as usize;
+    if foot_h > 0 && footer_top > top {
         let sep = Line::from(Span::styled("─".repeat(area.width as usize), Style::default().fg(c.dim)));
         f.render_widget(
             Paragraph::new(sep),

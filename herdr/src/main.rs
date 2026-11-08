@@ -416,6 +416,8 @@ fn main() {
                 flash: None,
                 up_tag: "",
                 slot: 0,
+                buttons: None,
+                git: None,
             };
             let width: usize = a[5].parse().unwrap_or(40);
             let lines = if a[4] == "narrow" {

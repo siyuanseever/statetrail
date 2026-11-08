@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::i18n::t;
@@ -348,8 +348,24 @@ fn fresh(w: &Window) -> bool {
     secs_left(w).is_some_and(|s| s > 0.0)
 }
 
+/// 实时额度读数换一个来源：读哪个文件、怎么去查。tmux 版用 claude-tmux-sessions 的 usage-refresh.py
+/// 写的 <配置目录>/tmux-usage-live.json（tmux 底栏、Python 侧栏一直在用，格式一样），别自己再查一份。不设就是下面自带的。
+pub struct LiveSource {
+    pub file: fn(&Path) -> PathBuf,
+    pub refresh: fn(&Path, bool),
+}
+
+static LIVE: OnceLock<LiveSource> = OnceLock::new();
+
+pub fn set_live_source(src: LiveSource) {
+    let _ = LIVE.set(src);
+}
+
 /// 一个配置目录一份读数，文件名带目录路径 sha256 的前 8 位（和 Python 版同名，两版共用节流）。
 pub fn usage_file(cfg_dir: &Path) -> PathBuf {
+    if let Some(src) = LIVE.get() {
+        return (src.file)(cfg_dir);
+    }
     crate::state_dir().join(format!("usage-{}.json", &sha256_hex(cfg_dir.to_string_lossy().as_bytes())[..8]))
 }
 
@@ -532,6 +548,9 @@ fn log_fetch(cfg_dir: &Path, err: Option<&str>) {
 /// 去查一次这个账号的真实额度。自动的最多每 30 分钟一次（失败的也算），手动的两次至少隔 20 秒；
 /// 好几个轨迹同时在看同一个账号时用文件锁串起来，只发一个请求。要一两秒，放后台线程里调。
 pub fn refresh_usage(cfg_dir: &Path, force: bool) {
+    if let Some(src) = LIVE.get() {
+        return (src.refresh)(cfg_dir, force);
+    }
     if !cfg_dir.is_dir() {
         return;
     }
