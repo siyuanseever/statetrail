@@ -2,7 +2,7 @@
 //!
 //! - 状态看屏幕认（core::detect，规则照搬 herdr），不靠钩子：钩子漏一次就一直错，屏幕不会。
 //!   主回合停了、后台还有活的，屏幕上和闲着一样，另看两处：Claude 自己写的 <配置目录>/sessions/<进程号>.json 里的
-//!   status（busy 在干活、shell 主回合停了但后台命令还在跑，2026-11-09 实测），和钩子记下的后台 subagent。
+//!   status（只认 busy；shell = 主回合停了但后台还挂着命令，不算，见 OwnNow::busy），和钩子记下的后台 subagent。
 //! - 四种：WAIT 等你确认、RUN 在跑、DONE 做完了你还没看、READ 看过了 / 一直闲着。
 //!   跑完时你正看着它就直接是 READ；DONE 等你把焦点放到它上面（或在 picker 里跳过去）才变 READ。
 //! - 画两处：全局选项 @claude_dots（状态栏一排圆点，一个 Claude 一个，按 session 分组）、每个窗口的 @claude_win（窗口列表里的徽标）。
@@ -79,16 +79,18 @@ struct OwnNow {
 }
 
 impl OwnNow {
-    /// 这个窗格按 Claude 自己的说法在不在干活：本窗格的会话；attach 的后台任务；agents 面板看有没有后台任务在跑
+    /// 这个窗格按 Claude 自己的说法在不在干活：本窗格的会话，或者 attach 着的那个后台任务，报的是 busy。
+    /// 只认 busy（2026-11-09 用户：「有些 monitor 已经不再跑东西了，显示的还是 running」）：
+    /// - shell（主回合停了、后台还挂着命令）不算：挂着的常是常驻的监视、日志、开发服务器，会让圆点一直亮
+    /// - claude agents 面板不算任何后台任务的：常驻的 monitor 任务一直报 busy，面板就一直亮；面板自己在干活屏幕上看得出来
     fn busy(&self, p: &Pane, attach: &HashMap<String, Option<String>>) -> bool {
-        let on = |s: Option<&String>| matches!(s.map(String::as_str), Some("busy" | "shell"));
+        let on = |s: Option<&String>| s.is_some_and(|s| s == "busy");
         if let Some(s) = self.pane.get(&p.id) {
             return on(Some(s));
         }
         match attach.get(&p.shell).and_then(|j| j.as_deref()) {
-            Some("*") => self.job.values().any(|s| s == "busy"),
-            Some(job) => on(self.job.get(job)),
-            None => false,
+            Some(job) if job != "*" => on(self.job.get(job)),
+            _ => false,
         }
     }
 }
