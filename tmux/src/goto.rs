@@ -60,7 +60,7 @@ impl Host for Tmux {
                 if !(*cmd == "claude" || tmux::is_version(cmd)) || *mate == "1" {
                     return None;
                 }
-                let status = match states[*pane].as_str() {
+                let status = match tmux::agent_state(&states[*pane]) {
                     Some("wait") => "blocked",
                     Some("run") => "working",
                     Some("done") => "done",

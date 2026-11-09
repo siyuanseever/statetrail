@@ -60,6 +60,24 @@ you have not rebound `MouseDown1Status` yourself. Nothing is written to `~/.clau
 
 From a checkout: `cd tmux && ./install.sh` builds into `tmux/bin/` and links `~/.local/bin/statetrail-tmux`.
 
+## For other tools: read-only JSON
+
+Two read-only commands for scripts and other agent sessions (for example one that routes a new request to the session
+already working on it). They change nothing: no state goes from done to read, nothing jumps, no chapters are generated.
+
+```bash
+statetrail-tmux list --json [--turns N]
+statetrail-tmux search <word…> --json [--since <ISO time>] [--cwd <prefix>] [--limit N] [--no-chapters]
+```
+
+- `list`: one object per Claude pane — `pane`, `session`, `window` (`index`, `name`), `sid`, `cwd`, `config_dir`,
+  `state` (`wait` / `run` / `done` / `read`, the same as the status-bar dots), `state_since`, `mate`, `chapter`
+  (the latest chapter title or null) and the last N `turns` (default 5): `{n, ts, prompt, reply_head}`, cut to about
+  200 characters.
+- `search`: brings the search index up to date first (as `Tab` in the trail does), then returns every turn where all
+  words appear in what you said, plus chapters whose title contains them (`kind`: `turn` / `chapter`), newest first:
+  `{kind, sid, cwd, title, pane, n, ts, prompt, chapter}`. `pane` is set when the session is open in tmux.
+
 ## Configuration
 
 `~/.config/statetrail-tmux/config.toml`; see [README.zh-CN.md](README.zh-CN.md#配置) for every key

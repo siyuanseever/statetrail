@@ -57,6 +57,22 @@ run-shell '~/.local/bin/statetrail-tmux init'
 
 从仓库装：`cd tmux && ./install.sh` 编到 `tmux/bin/`，并在 `~/.local/bin/statetrail-tmux` 放软链。
 
+## 给别的程序用：只读 JSON
+
+两个只读命令，给脚本和别的 Claude 会话用（比如把新来的一件事转给已经在做它的那个会话）。不改任何东西：
+不把「做完没看」变成「看过」、不跳转、不调 Haiku 起章名。
+
+```bash
+statetrail-tmux list --json [--turns N]
+statetrail-tmux search <词…> --json [--since <ISO 时间>] [--cwd <前缀>] [--limit N] [--no-chapters]
+```
+
+- `list`：每个 Claude 窗格一条：`pane`、`session`、`window`（`index`、`name`）、`sid`、`cwd`、`config_dir`、
+  `state`（`wait` / `run` / `done` / `read`，和状态栏圆点同一份）、`state_since`、`mate`、`chapter`（最近一章的章名，没有是 null），
+  和最后 N 轮 `turns`（默认 5）：`{n, ts, prompt, reply_head}`，各截到约 200 字。
+- `search`：先把搜索索引补到最新（和轨迹里按 `Tab` 一样），再找所有词都出现在你说过的话里的轮次，以及章名里含这些词的章
+  （`kind`：`turn` / `chapter`），新的在前：`{kind, sid, cwd, title, pane, n, ts, prompt, chapter}`。会话开在 tmux 里时带 `pane`。
+
 ## 配置
 
 `~/.config/statetrail-tmux/config.toml`，每一项都可以不写：

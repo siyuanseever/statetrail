@@ -9,6 +9,7 @@
 //! 和宿主无关的部分（对话记录、额度、画面、跳转、分章、搜索）在仓库根目录的 core/，herdr 版也用它。
 
 mod agents;
+mod cli;
 mod daemon;
 mod goto;
 mod init;
@@ -229,6 +230,9 @@ fn main() {
         Some("click") => init::click(&arg(1), &arg(2)),
         Some("agents") => agents::run(arg(1) == "--once"),
         Some("goto") => goto::run(&arg(1), &arg(2)),
+        // 给别的程序用的只读命令（JSON）：见 cli.rs
+        Some("list") => cli::list(&args[1..]),
+        Some("search") => cli::search(&args[1..]),
         Some("goto-list") => goto::list(),
         Some("pickrepo") => open::cmd_pickrepo(&arg(1)),
         Some("maybe-close") => open::maybe_close(&arg(1)),
@@ -260,7 +264,7 @@ fn main() {
             }
         }
         _ => {
-            eprintln!("usage: statetrail-tmux {{init|serve|click <range> <client>|toggle <pane>|pane <claude-pane>|daemon|agents [--once]|goto <pane> [client]|goto-list|pickrepo <dir>|version}}");
+            eprintln!("usage: statetrail-tmux {{init|serve|click <range> <client>|toggle <pane>|pane <claude-pane>|daemon|agents [--once]|goto <pane> [client]|goto-list|list --json [--turns N]|search <word…> --json|pickrepo <dir>|version}}");
             std::process::exit(2);
         }
     }

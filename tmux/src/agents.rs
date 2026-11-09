@@ -51,6 +51,7 @@ struct Agent {
     key: (String, String), // 上次读屏时的（窗口输出时间, 标题）
     read_at: Instant,
     show: Show,
+    since: f64, // 进入现在这个状态的时间（秒）；常驻进程刚起来时不知道之前的事，记成它第一次看到的时候
 }
 
 #[derive(Default)]
@@ -239,6 +240,7 @@ impl Agents {
                 read_at: Instant::now(),
                 // 刚起来不知道之前的事：钩子说做完了还没看的，先当 DONE
                 show: if self.st.unread_done(&p.id) { Show::Done } else { Show::Read },
+                since: now,
             });
             if let Some(screen) = screens.get(&p.id) {
                 let d = detect::detect(screen, &p.title);
@@ -251,6 +253,7 @@ impl Agents {
             }
             let busy_sub = self.st.busy_subagents(&p.id, now) > 0
                 || own.busy(p, &self.own.attach);
+            let before = a.show;
             a.show = match a.det {
                 State::Blocked => Show::Wait,
                 State::Working => Show::Run,
@@ -263,6 +266,9 @@ impl Agents {
                     _ => Show::Read,
                 },
             };
+            if a.show != before {
+                a.since = now;
+            }
         }
         let live: HashSet<&str> = panes.iter().map(|p| p.id.as_str()).collect();
         self.agents.retain(|k, _| live.contains(k.as_str()));
@@ -271,18 +277,23 @@ impl Agents {
         true
     }
 
-    /// 每个 Claude 的状态写进 <状态目录>/agents.json（{"%3": "run", …}），跳转浮窗读它，和圆点说的一样。变了才写。
+    /// 每个 Claude 的状态写进 <状态目录>/agents.json（{"%3": {"state": "run", "since": "2026-11-09T18:02:11+08:00"}, …}），
+    /// 跳转浮窗、轨迹、list --json 读它，和圆点说的一样。变了才写。
     fn publish(&mut self, panes: &[Pane]) {
         let m: serde_json::Map<String, serde_json::Value> = panes
             .iter()
             .filter_map(|p| {
-                let s = match self.agents.get(&p.id)?.show {
+                let a = self.agents.get(&p.id)?;
+                let s = match a.show {
                     Show::Wait => "wait",
                     Show::Run => "run",
                     Show::Done => "done",
                     Show::Read => "read",
                 };
-                Some((p.id.clone(), s.into()))
+                let since = chrono::DateTime::from_timestamp(a.since as i64, 0)
+                    .map(|t| t.with_timezone(&chrono::Local).to_rfc3339_opts(chrono::SecondsFormat::Secs, false))
+                    .unwrap_or_default();
+                Some((p.id.clone(), serde_json::json!({"state": s, "since": since})))
             })
             .collect();
         let text = serde_json::Value::Object(m).to_string();

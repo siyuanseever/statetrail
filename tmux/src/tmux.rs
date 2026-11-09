@@ -141,6 +141,11 @@ fn mine(found: Vec<(String, String, u32)>) -> HashMap<String, String> {
         .collect()
 }
 
+/// agents.json 里一个窗格的状态：现在是 {"state": "run", "since": …}，以前直接是 "run"（换新版本那一下两种都可能读到）
+pub fn agent_state(v: &Value) -> Option<&str> {
+    v["state"].as_str().or_else(|| v.as_str())
+}
+
 /// 哪个窗格是哪个会话、在不在干活。三个来源，前面的说了算，钩子那份只是退路（没装 claude-tmux-sessions 的钩子也能用）：
 /// - Claude 自己写的 <配置目录>/sessions/<进程号>.json："tmux": "session:@窗口.%窗格" 和 sessionId（进程退出时删掉，只有活着的）
 /// - agents 常驻进程写的 <状态目录>/agents.json：看屏幕认的状态，和状态栏圆点同一份
@@ -219,9 +224,18 @@ impl Status {
             .or_else(|| self.data[pane]["session_id"].as_str().filter(|s| !s.is_empty()).map(str::to_owned))
     }
 
+    /// 这个窗格的 Claude 用的是哪个配置目录（哪个账号）：它的会话文件在哪个目录下就是哪个；认不出就 None
+    pub fn config_dir(&self, pane: &str) -> Option<PathBuf> {
+        let sid = self.own_sid.get(pane)?;
+        self.own
+            .iter()
+            .find(|(_, (_, g))| g.as_ref().is_some_and(|(p, s, _)| p == pane && s == sid))
+            .and_then(|(path, _)| path.parent()?.parent().map(std::path::Path::to_path_buf))
+    }
+
     /// 用钩子的说法（running / blocked / done / input）：agents 常驻进程看屏幕认的优先
     pub fn state(&self, pane: &str) -> Option<String> {
-        let mapped = match self.agents[pane].as_str() {
+        let mapped = match agent_state(&self.agents[pane]) {
             Some("wait") => Some("blocked"),
             Some("run") => Some("running"),
             Some("done") => Some("done"),
