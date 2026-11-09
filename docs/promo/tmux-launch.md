@@ -7,7 +7,7 @@
 
 ## 1. Reddit r/ClaudeAI
 
-**标题**：I run ~20 Claude Code sessions in tmux, so I made the status bar tell me which one needs me
+**标题**：statetrail: status-bar dots for every Claude Code session in tmux (which one is blocked, done, running)
 
 **配图**：动图
 
@@ -15,8 +15,7 @@
 
 **正文**：
 
-I keep a lot of Claude Code sessions open across tmux sessions, and I kept missing the one sitting on a permission
-prompt, or forgetting which one had finished. So I built statetrail:
+I run many Claude Code sessions across tmux sessions and needed to see which ones are blocked on me. statetrail adds:
 
 - **A dot per Claude in the tmux status bar**, grouped by session. Red is waiting for you (permission prompt,
   question), green finished while you were elsewhere, gold is running, grey you've seen. Click a dot to jump there.
