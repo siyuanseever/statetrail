@@ -7,6 +7,9 @@
 
 ## 1. Reddit r/ClaudeAI
 
+**已发**（2026-11-09，用户自己贴的，flair「Claude Code Workflow」）：https://www.reddit.com/r/ClaudeAI/comments/1xrn648/statetrail_statusbar_dots_for_every_claude_code/
+发的时候的基线：stars=0 forks=0 watchers=0 views14d=30/11 tmux-v0.1.0 downloads=14。一两天后对比 star、访问、来源、下载。
+
 **标题**：statetrail: status-bar dots for every Claude Code session in tmux (which one is blocked, done, running)
 
 **配图**：动图
