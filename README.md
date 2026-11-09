@@ -1,38 +1,67 @@
 # statetrail
 
-**The trail of your coding agent's session, next to the running agent: every turn one row, click one and the agent's
-own screen scrolls there. Plus model, account, context and quota at a glance.**
+**See every Claude Code session in tmux at a glance — who is waiting for you, who is done — and jump to any turn of any
+session.**
 
-Session browsers like claude-code-history-viewer or claude-code-transcripts let you look back after the fact.
-statetrail is for the session you are in.
+<p align="center">
+  <img src="tmux/docs/demo.gif" alt="A Claude in another session asks for permission: its dot in the status bar turns red; one click jumps there; prefix g lists every Claude by session; clicking a turn in the trail scrolls Claude to it" width="960">
+</p>
 
-Two plugins live in this repository, one per host. Pick the one for where you run Claude Code:
+<p align="center"><sub>Real tmux and the real program; the Claude sessions and their data are a demo rig
+(<a href="tmux/demo/">tmux/demo</a>).</sub></p>
 
-| | Where it runs | Install |
-|---|---|---|
-| [`herdr/`](herdr/) | a pane docked to the right of Claude Code in [herdr](https://herdr.dev) | `herdr plugin install siyuanseever/statetrail/herdr` |
-| [`tmux/`](tmux/) | a pane docked to the right of Claude Code in tmux (with [claude-tmux-sessions](https://github.com/siyuanseever/claude-tmux-sessions)) | `tmux/install.sh` |
-| `claude-code/` | inside Claude Code itself | coming soon |
+[简体中文](README.zh-CN.md)
 
-The parts that do not depend on the host (transcripts, quota, drawing, jumping, chapters, search) live in [`core/`](core/)
-and are shared by both. The trail started as part of
-[claude-tmux-sessions](https://github.com/siyuanseever/claude-tmux-sessions), a tmux setup for running many Claude
-Code sessions; `tmux/` replaces its Python + fzf sidebar.
+## What you get
 
-![Wide trail: chapters on the right, turn 3 selected, Claude scrolled to it](herdr/docs/wide.png)
+- **A dot per Claude in the status bar**, grouped by tmux session: red waits for you (a permission prompt, a question),
+  green finished while you were elsewhere, gold is running, grey you have seen. Click a dot to go there, click a
+  session name to switch to it.
+- **`prefix g`**: a popup listing every Claude by session, with how long it has been in that state, what it was asked,
+  and a live preview. `h` `l` move between sessions, `j` `k` between Claudes, `Enter` jumps.
+- **The trail**, docked to the right of the Claude you are looking at: one row per turn (what you asked, how the reply
+  starts), grouped into chapters; click a turn and Claude's own screen scrolls there. `/` searches this session,
+  `Tab` every session on the machine. The header shows model, account, context and 5h / 7d quota.
 
-| Narrow trail | Go to any Claude (`statetrail.goto`) |
+State comes from reading each pane's screen (with [herdr](https://herdr.dev)'s Claude detection rules) and from the
+session files Claude Code writes itself. No hooks, nothing added to `~/.claude/settings.json`. One small Rust binary:
+the background part takes about 15 MB of memory and each open trail about 10 MB; a Claude's screen is only read when
+its window has new output (and every 30 seconds as a safety net).
+
+## Install
+
+macOS or Linux, tmux 3.2+ (clicking the dots needs 3.4+, the Git and file floats 3.7+).
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/siyuanseever/statetrail/main/tmux/get.sh | sh
+```
+
+Then add this line at the end of your tmux config and reload tmux:
+
+```tmux
+run-shell '~/.local/bin/statetrail-tmux init'
+```
+
+Jumping to a turn needs Claude Code's fullscreen UI (`/tui fullscreen`). Options, keys and how it works:
+[tmux/README.md](tmux/README.md).
+
+## Also for herdr
+
+The same trail and popup as a [herdr](https://herdr.dev) plugin:
+`herdr plugin install siyuanseever/statetrail/herdr` — see [herdr/](herdr/).
+
+## Layout
+
+| | |
 |---|---|
-| ![Narrow trail beside Claude](herdr/docs/narrow.png) | ![Popup listing every Claude by workspace, with state and live preview](herdr/docs/goto.png) |
+| [`tmux/`](tmux/) | statetrail for tmux |
+| [`herdr/`](herdr/) | the herdr plugin |
+| [`core/`](core/) | shared by both: transcripts, quota, drawing, jumping, chapters, search, the popup, screen-state detection |
 
-## What every version shows
+## Credits
 
-- **The trail**: one row per turn — what you asked, how the final reply starts. Click to scroll the agent there.
-- **Model and account**, so two accounts open side by side never get mixed up.
-- **Context, 5-hour and 7-day quota**, grey while fine, coloured only when something needs attention.
-
-Each version only adds what its host does not already show: in herdr, for example, the agent's running / waiting
-state is left to herdr's own agent list.
+The screen-state rules (`core/src/detect/claude.toml`) and the way they are matched come from
+[herdr](https://github.com/herdrdev/herdr), Apache License 2.0; its license is next to them.
 
 ## License
 
