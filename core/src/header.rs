@@ -95,6 +95,13 @@ pub const PLUGIN_ICONS: [(&str, &str, &str); 3] = [
     ("furkankly.zoetrope", "\u{f126}", "⋔"), // 会话流程图
 ];
 
+/// 设了不止一个 Claude 账号（~/.claude 之外还有 ~/.claude-xxx）：只有这时账号后面才画 ⇄，一个账号的人用不着换
+/// （用户 2026-11-09：「如果他没有设置多个 claude 账号就不要给他打开了」）。进程里只看一次。
+fn multi_account() -> bool {
+    static M: OnceLock<bool> = OnceLock::new();
+    *M.get_or_init(|| crate::claude::config_dirs().len() > 1)
+}
+
 pub fn icon(name: &str) -> String {
     let tier = tier();
     let Some(row) = ICONS.iter().find(|r| r.0 == name) else {
@@ -229,7 +236,7 @@ pub fn wide(width: usize, i: &Info) -> (Vec<SLine>, usize) {
         &acct,
         claude::auto_compact_at(),
     ));
-    if !i.model.is_empty() || !acct.is_empty() {
+    if (!i.model.is_empty() || !acct.is_empty()) && multi_account() {
         lines[first].push((format!(" {}", icon("switch")), Some(c.accent))); // 模型 · 账号那一行
     }
     lines.push(render::lead(head_line, i.up_tag, i.slot)); // 「N 轮」那一行放在最后，▲ 在它最前面
@@ -273,7 +280,9 @@ pub fn narrow(width: usize, i: &Info) -> Vec<SLine> {
     // 账号写完整用户名（用户定的），放不下才退成和别的账号不一样的那截
     let acct_field = |acct: &str| {
         let mut field = tagged("account", acct);
-        field.push((format!(" {}", icon("switch")), Some(c.accent)));
+        if multi_account() {
+            field.push((format!(" {}", icon("switch")), Some(c.accent)));
+        }
         field
     };
     let full = acct_field(&claude::current_account(i.cfg_dir));
