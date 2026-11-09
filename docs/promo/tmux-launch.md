@@ -64,6 +64,9 @@ https://github.com/siyuanseever/statetrail
 
 ## 3. Show HN
 
+**没发成**（2026-11-09）：标题第一版 87 字符超了 80 的上限；换成用户选的第 2 个短标题再提交，跳到 news.ycombinator.com/showlim：
+HN 暂时限制新用户发 Show HN（「We're temporarily restricting Show HNs because of a massive influx, mostly by users who aren't yet familiar with the site」），要先在站里正常参与一段时间。没有去掉 Show HN 前缀绕开它。
+
 **标题**：Show HN: Statetrail – See which Claude Code session needs you, from the tmux status bar
 
 **链接**：https://github.com/siyuanseever/statetrail （HN 不能贴图，点进去看到的是仓库首页，首页第一屏就是这张动图）
@@ -108,6 +111,8 @@ State detection reuses herdr's Claude rules (credited, Apache-2.0). https://gith
 ---
 
 ## 6. V2EX（分享创造）
+
+**没发成**（2026-11-09）：账号要邀请码激活才能发帖（发帖页跳到「使用邀请码激活账号」）。
 
 **标题**：statetrail：在 tmux 状态栏上看每个 Claude Code 会话在等你、做完还是在跑（开源）
 
