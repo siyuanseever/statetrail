@@ -487,12 +487,16 @@ pub fn run(once: bool) {
     }
     let code = crate::exe_mtime();
     let mut code_new = None;
+    let mut down = 0;
     loop {
         let up = s.tick();
         if crate::code_changed(code, &mut code_new) {
             crate::restart();
         }
-        std::thread::sleep(if up { TICK } else { TICK * 5 });
+        // 连不上 tmux：前 10 次每秒再试（刚被 init 拉起时，tmux 还在执行配置文件，头一次常常连不上；以前一失败就等 5 秒，
+        // Linux 上实测圆点要 5 秒多才出来），之后每 5 秒试一次
+        down = if up { 0 } else { down + 1 };
+        std::thread::sleep(if down == 0 || down <= 10 { TICK } else { TICK * 5 });
     }
 }
 
