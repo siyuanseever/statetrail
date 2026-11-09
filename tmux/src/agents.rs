@@ -24,7 +24,7 @@ const DOTS_OPT: &str = "@claude_dots";
 const WIN_OPT: &str = "@claude_win";
 
 const FMT: &str = "P\t#{pane_id}\t#{session_name}\t#{session_id}\t#{window_id}\t#{pane_current_command}\t#{window_activity}\t\
-#{?#{m:*--agent-id*,#{pane_start_command}},1,0}\t#{pane_title}";
+#{?#{m:*--agent-id*,#{pane_start_command}},1,0}\t#{pane_pid}\t#{pane_title}";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Show {
@@ -42,6 +42,7 @@ struct Pane {
     title: String,
     activity: String,
     mate: bool,
+    shell: String, // 窗格里 shell 的进程号：认它下面跑的是不是 claude attach / claude agents
 }
 
 struct Agent {
@@ -62,13 +63,37 @@ struct Agents {
 }
 
 /// Claude 自己报的状态：窗格 → status（"busy" / "shell" / "idle"）。每个会话文件变了才重读。
+/// 后台跑的（claude agents 里那些）没有窗格，按 jobId 记：`claude attach <jobId>` 的窗格看它的。
 #[derive(Default)]
 struct Own {
     files: HashMap<std::path::PathBuf, (SystemTime, Option<(String, String)>)>,
+    attach: HashMap<String, Option<String>>, // shell 进程号 → 它下面 claude attach 的 jobId（"*" = claude agents 面板）
+}
+
+/// 一轮里 Claude 自己报的状态
+#[derive(Default)]
+struct OwnNow {
+    pane: HashMap<String, String>,
+    job: HashMap<String, String>,
+}
+
+impl OwnNow {
+    /// 这个窗格按 Claude 自己的说法在不在干活：本窗格的会话；attach 的后台任务；agents 面板看有没有后台任务在跑
+    fn busy(&self, p: &Pane, attach: &HashMap<String, Option<String>>) -> bool {
+        let on = |s: Option<&String>| matches!(s.map(String::as_str), Some("busy" | "shell"));
+        if let Some(s) = self.pane.get(&p.id) {
+            return on(Some(s));
+        }
+        match attach.get(&p.shell).and_then(|j| j.as_deref()) {
+            Some("*") => self.job.values().any(|s| s == "busy"),
+            Some(job) => on(self.job.get(job)),
+            None => false,
+        }
+    }
 }
 
 impl Own {
-    fn reload(&mut self) -> HashMap<String, String> {
+    fn reload(&mut self) -> OwnNow {
         let mut seen = HashSet::new();
         for dir in statetrail_core::claude::config_dirs() {
             for e in std::fs::read_dir(dir.join("sessions")).into_iter().flatten().flatten() {
@@ -82,16 +107,56 @@ impl Own {
                     continue;
                 }
                 let v: Option<serde_json::Value> = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok());
-                // "tmux": "session:@窗口.%窗格"
+                // "tmux": "session:@窗口.%窗格"；后台任务没有 tmux，记成 "job:<jobId>"
                 let got = v.and_then(|v| {
-                    let pane = v["tmux"].as_str()?.rsplit('.').next()?.to_owned();
-                    Some((pane, v["status"].as_str()?.to_owned()))
+                    let key = match v["tmux"].as_str() {
+                        Some(t) => t.rsplit('.').next()?.to_owned(),
+                        None => format!("job:{}", v["jobId"].as_str()?),
+                    };
+                    Some((key, v["status"].as_str()?.to_owned()))
                 });
                 self.files.insert(path, (mt, got));
             }
         }
         self.files.retain(|p, _| seen.contains(p));
-        self.files.values().filter_map(|(_, g)| g.clone()).collect()
+        let mut now = OwnNow::default();
+        for (k, st) in self.files.values().filter_map(|(_, g)| g.clone()) {
+            match k.strip_prefix("job:") {
+                Some(j) => now.job.insert(j.to_owned(), st),
+                None => now.pane.insert(k, st),
+            };
+        }
+        now
+    }
+
+    /// 没有自己会话文件的 Claude 窗格：看 shell 下面跑的是不是 claude attach / claude agents。
+    /// 按 shell 进程号记住，只在出现没见过的才跑一次 ps。
+    fn scan_attach(&mut self, panes: &[Pane], now: &OwnNow) {
+        let unknown = panes.iter().any(|p| !now.pane.contains_key(&p.id) && !self.attach.contains_key(&p.shell));
+        let live: HashSet<&str> = panes.iter().map(|p| p.shell.as_str()).collect();
+        self.attach.retain(|k, _| live.contains(k.as_str()));
+        if !unknown {
+            return;
+        }
+        let out = std::process::Command::new("ps")
+            .args(["-A", "-o", "ppid=,args="])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default();
+        for p in panes.iter().filter(|p| !now.pane.contains_key(&p.id)) {
+            let job = out.lines().find_map(|l| {
+                let (ppid, args) = l.trim_start().split_once(' ')?;
+                if ppid != p.shell {
+                    return None;
+                }
+                let args = args.trim();
+                if args == "claude agents" {
+                    return Some("*".to_owned());
+                }
+                args.strip_prefix("claude attach ").map(|j| j.split_whitespace().next().unwrap_or("").to_owned())
+            });
+            self.attach.insert(p.shell.clone(), job);
+        }
     }
 }
 
@@ -117,9 +182,10 @@ impl Agents {
         let mut watched = HashSet::new();
         let mut wins: Vec<(String, String)> = Vec::new();
         for line in out.lines() {
-            let f: Vec<&str> = line.splitn(9, '\t').collect();
+            let f: Vec<&str> = line.splitn(10, '\t').collect();
             match f.as_slice() {
-                ["P", id, sess, sid, win, cmd, activity, mate, title] if is_claude(cmd) => panes.push(Pane {
+                ["P", id, sess, sid, win, cmd, activity, mate, shell, title] if is_claude(cmd) => panes.push(Pane {
+                    shell: shell.to_string(),
                     id: id.to_string(),
                     sess: sess.to_string(),
                     sess_id: sid.to_string(),
@@ -155,6 +221,7 @@ impl Agents {
         let screens = capture_all(&need);
         self.st.reload();
         let own = self.own.reload();
+        self.own.scan_attach(&panes, &own);
         let now = now_secs();
         for p in &panes {
             let seen = watched.contains(&p.id);
@@ -176,7 +243,7 @@ impl Agents {
                 a.read_at = Instant::now();
             }
             let busy_sub = self.st.busy_subagents(&p.id, now) > 0
-                || matches!(own.get(&p.id).map(String::as_str), Some("busy" | "shell"));
+                || own.busy(p, &self.own.attach);
             a.show = match a.det {
                 State::Blocked => Show::Wait,
                 State::Working => Show::Run,
@@ -350,9 +417,10 @@ pub fn run(once: bool) {
         let panes: Vec<Pane> = out
             .lines()
             .filter_map(|l| {
-                let f: Vec<&str> = l.splitn(9, '\t').collect();
-                let ["P", id, sess, sid, win, cmd, act, mate, title] = f.as_slice() else { return None };
+                let f: Vec<&str> = l.splitn(10, '\t').collect();
+                let ["P", id, sess, sid, win, cmd, act, mate, shell, title] = f.as_slice() else { return None };
                 is_claude(cmd).then(|| Pane {
+                    shell: shell.to_string(),
                     id: id.to_string(),
                     sess: sess.to_string(),
                     sess_id: sid.to_string(),
@@ -367,10 +435,14 @@ pub fn run(once: bool) {
         let screens = capture_all(&refs);
         s.st.reload();
         let own = s.own.reload();
+        s.own.scan_attach(&panes, &own);
         for p in &panes {
             let d = detect::detect(screens.get(&p.id).map(String::as_str).unwrap_or(""), &p.title);
             let subs = s.st.busy_subagents(&p.id, now_secs());
-            let o = own.get(&p.id).map(String::as_str).unwrap_or("-");
+            let o = match own.pane.get(&p.id) {
+                Some(st) => st.clone(),
+                None => format!("{}→{}", s.own.attach.get(&p.shell).cloned().flatten().unwrap_or_default(), own.busy(p, &s.own.attach)),
+            };
             println!("{}\t{}\t{:?}\t{}\tclaude={o}\tsubagents={subs}{}", p.id, p.sess, d.state, d.rule, if p.mate { "\tmate" } else { "" });
         }
         return;
@@ -399,6 +471,7 @@ mod tests {
             title: String::new(),
             activity: String::new(),
             mate: false,
+            shell: String::new(),
         }
     }
 
