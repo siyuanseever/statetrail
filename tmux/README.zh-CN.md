@@ -34,24 +34,28 @@ Rust 写的，替掉 [claude-tmux-sessions](https://github.com/siyuanseever/clau
 
 ## 安装
 
-需要：tmux 3.7+（浮动窗格）、Rust（`cargo`）、claude-tmux-sessions 装好（它的 hook 写
-`~/.claude/tmux-claude-status.json`，告诉轨迹哪个窗格是哪个会话；还有 `float-tool.sh`、`usage-refresh.py`、`switch_account.py`）。
-Claude Code 要用全屏界面（`/tui fullscreen`），跳转滚的就是它。可选：lazygit、yazi、Nerd Font。
+要 tmux 3.2+，macOS 或 Linux（点圆点要 3.4+，Git、文件浮窗要 3.7+）。点一轮让 Claude 跳过去要用 Claude Code 的全屏界面（`/tui fullscreen`）。
+可选：lazygit、yazi、Nerd Font。
 
 ```bash
-cd tmux
-./install.sh             # 编好装到 tmux/bin/statetrail-tmux
-./install.sh --launchd   # 再装常驻服务 com.statetrail.tmux（开机自启、崩了自动拉起）
+curl -fsSL https://raw.githubusercontent.com/siyuanseever/statetrail/main/tmux/get.sh | sh
+# 或者自己编：cargo install --git https://github.com/siyuanseever/statetrail statetrail-tmux
 ```
 
-状态栏的轨迹按钮改成调它：claude-tmux-sessions 的 `bin/float-tool.sh` 里 `tool:trail` 那一支换成
+然后在 tmux 配置最后加一行（用 oh-my-tmux 的加在 `.tmux.conf.local` 最后），重新加载 tmux：
 
-```bash
-exec /path/to/statetrail/tmux/bin/statetrail-tmux toggle "$caller"
+```tmux
+run-shell '~/.local/bin/statetrail-tmux init'
 ```
 
-从 Python 侧栏切过来时，先停掉它的常驻服务（`launchctl bootout gui/$(id -u)/com.claude-tmux.sidebar`），
-关掉开着的 fzf 侧栏，Rust 版的常驻进程会在一秒内重新开出来。窗格上的标记两版一样，tmux 配置、resurrect 钩子不用改。
+`init` 会起常驻进程（tmux 关了它自己退），在 `status-right` 最前面放上每个 Claude 一个的圆点，绑 `prefix g`（跳转浮窗）和
+`prefix T`（开关轨迹）；你没自己改过 `MouseDown1Status` 的话，圆点和 session 名可以点。不写 `~/.claude/settings.json`，不用装钩子。
+
+- `init` 那行之前 `set -g @statetrail_status off`：不动状态栏，自己把 `#{E:@claude_dots}` 放到想放的地方。
+- `set -g @statetrail_keys off`：不绑键。
+- 装了 [claude-tmux-sessions](https://github.com/siyuanseever/claude-tmux-sessions) 的话，它的额度读数和换账号也会用上。
+
+从仓库装：`cd tmux && ./install.sh` 编到 `tmux/bin/`，并在 `~/.local/bin/statetrail-tmux` 放软链。
 
 ## 配置
 

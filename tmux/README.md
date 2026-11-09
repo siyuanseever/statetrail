@@ -35,18 +35,30 @@ the tmux layer.
 
 ## Install
 
-Needs tmux 3.7+, Rust, and claude-tmux-sessions (its hook writes `~/.claude/tmux-claude-status.json`; it also provides
-`float-tool.sh`, `usage-refresh.py` and `switch_account.py`). Claude Code must use the fullscreen UI (`/tui fullscreen`).
+Needs tmux 3.2+ on macOS or Linux (clicking the dots needs 3.4+, the Git and file floats 3.7+). Claude Code must use the fullscreen UI
+(`/tui fullscreen`) for jumping to a turn. Optional: lazygit, yazi, a Nerd Font.
 
 ```bash
-cd tmux
-./install.sh             # builds and installs tmux/bin/statetrail-tmux
-./install.sh --launchd   # also installs the daemon as launchd service com.statetrail.tmux
+curl -fsSL https://raw.githubusercontent.com/siyuanseever/statetrail/main/tmux/get.sh | sh
+# or build it: cargo install --git https://github.com/siyuanseever/statetrail statetrail-tmux
 ```
 
-Point the status-bar button at it: in claude-tmux-sessions' `bin/float-tool.sh`, make the `tool:trail` branch
-`exec /path/to/statetrail/tmux/bin/statetrail-tmux toggle "$caller"`. Pane options are the same as the Python sidebar's,
-so the tmux config and the resurrect hooks need no change.
+Then add one line at the end of your tmux config (with oh-my-tmux, at the end of `.tmux.conf.local`) and reload tmux:
+
+```tmux
+run-shell '~/.local/bin/statetrail-tmux init'
+```
+
+`init` starts the background process (it exits when tmux does), puts a dot per Claude at the front of `status-right`,
+binds `prefix g` (jump popup) and `prefix T` (toggle the trail), and makes the dots and session names clickable when
+you have not rebound `MouseDown1Status` yourself. Nothing is written to `~/.claude/settings.json`; no hooks are needed.
+
+- `set -g @statetrail_status off` before the `init` line: don't touch the status bar; put `#{E:@claude_dots}` where you want it.
+- `set -g @statetrail_keys off`: don't bind keys.
+- With [claude-tmux-sessions](https://github.com/siyuanseever/claude-tmux-sessions) installed, its quota readings and
+  account switching are used too.
+
+From a checkout: `cd tmux && ./install.sh` builds into `tmux/bin/` and links `~/.local/bin/statetrail-tmux`.
 
 ## Configuration
 
