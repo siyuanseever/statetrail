@@ -82,7 +82,7 @@ run-shell 'statetrail-tmux init'
   - 没验过：真的另一个 macOS 用户；get.sh 真下载，要等第一个 `tmux-v*` 标签发出去、合进 main 才有地址。
 - **2026-11-09 发了 tmux-v0.1.0**：Release 8 个文件（4 个平台各一个包 + sha256），main `98dfc11..1e8ad8a`。
   用登录过的 gh 下回来核过 sha256、能跑。没登录的 curl 当天下 Release 文件全是 504：GitHub 当天有事故
-  「Increased timeouts due to surge in anonymous users」，get.sh 加了重试（`32cb9b8`），要快进进 main 才生效。
+  「Increased timeouts due to surge in anonymous users」，get.sh 加了重试（`32cb9b8`），main 已快进到 `9f8533f`。随后 `curl … get.sh | sh` 真下载装到临时目录，`statetrail-tmux 0.1.0` 能跑。
 - 原来第 3 步要处理的三处 claude-tmux-sessions 脚本（已处理）：
   - `float-tool.sh`：Git、文件浮窗，并进 Rust。
   - `usage-refresh.py`：查实时额度，改用 core 里 herdr 版那套 Rust 查法。
