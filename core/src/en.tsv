@@ -146,3 +146,5 @@ Esc 清掉搜索	Esc clears
 切账号：{msg}	Switch account: {msg}
 只配了一个账号，在 {path} 里加上另一个	Only one account; add another in {path}
 没找到 {path}	Not found: {path}
+没装 yazi（brew install yazi）	yazi is not installed (brew install yazi)
+没装 lazygit（brew install lazygit）	lazygit is not installed (brew install lazygit)

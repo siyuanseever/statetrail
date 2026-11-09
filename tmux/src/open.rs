@@ -172,18 +172,60 @@ pub fn float_tool(caller: &str, kind: &str, dir: &str, cmd: &str) {
     let fp = fp.trim();
     tmux::set_opt(fp, "@picker_float", kind);
     tmux::set_opt(fp, "@picker_caller", caller);
-    let ft = crate::config().scripts.join("float-tool.sh");
-    let _ = tmux::run(&["set-hook", "-p", "-t", fp, "pane-focus-out", &format!("run-shell -b '\"{}\" --maybe-close {fp}'", ft.display())]);
+    let me = crate::exe();
+    let _ = tmux::run(&["set-hook", "-p", "-t", fp, "pane-focus-out", &format!("run-shell -b '\"{}\" maybe-close {fp}'", me.display())]);
     let hook = format!("if -F '#{{!:#{{pane_floating_flag}}}}' {{ run-shell -b \"tmux kill-pane -t {fp} 2>/dev/null; true\" }}");
     let _ = tmux::run(&["set-hook", "-p", "-t", fp, "window-layout-changed", &hook]);
 }
 
-/// Git 按钮：目录在仓库里就照旧交给 float-tool.sh；不在（比如 ~/projects）就看下面两层的仓库：
+/// 浮窗失了焦点：等 0.4 秒再看，浮窗仍是它那个窗口的活动窗格、那个窗口也仍是当前窗口，就是终端自己失焦，留着；
+/// 焦点真挪到了别的窗格 / 窗口才关（和 float-tool.sh --maybe-close 一样）。
+pub fn maybe_close(fp: &str) {
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    match tmux::display(fp, "#{&&:#{pane_active},#{window_active}}") {
+        Some(s) if s == "1" => {}
+        Some(_) => {
+            let _ = tmux::run(&["kill-pane", "-t", fp]);
+        }
+        None => {}
+    }
+}
+
+/// 点了浮窗外面（init 绑的 MouseDown1Pane 调这里）：关掉这个窗口里的 Git / 文件浮窗。
+pub fn close_tools(window: &str) {
+    for l in tmux::run(&["list-panes", "-t", window, "-F", "#{pane_id} #{@picker_float}"]).unwrap_or_default().lines() {
+        if let Some((p, k)) = l.split_once(' ')
+            && k.starts_with("tool:")
+        {
+            let _ = tmux::run(&["kill-pane", "-t", p]);
+        }
+    }
+}
+
+/// PATH 里有没有这个程序
+fn have(prog: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(prog).is_file()))
+}
+
+/// 文件按钮：在 Claude 的目录里开 yazi 浮窗。没装 yazi 返回要闪的话。
+pub fn files_button(caller: &str) -> Option<String> {
+    if !have("yazi") {
+        return Some(crate::i18n::t("没装 yazi（brew install yazi）"));
+    }
+    let cwd = live_dir(&tmux::display(caller, "#{pane_current_path}").unwrap_or_default());
+    float_tool(caller, "tool:files", &cwd, "exec yazi");
+    None
+}
+
+/// Git 按钮：目录在仓库里就在那里开 lazygit；不在（比如 ~/projects）就看下面两层的仓库：
 /// 只有一个直接开它，好几个先列出来点一个（名字、分支、有改动标 ●），一个都没有就只说一句。返回要闪的话。
-pub fn git_button(caller: &str, cfg: &Config) -> Option<String> {
+pub fn git_button(caller: &str) -> Option<String> {
+    if !have("lazygit") {
+        return Some(crate::i18n::t("没装 lazygit（brew install lazygit）"));
+    }
     let cwd = live_dir(&tmux::display(caller, "#{pane_current_path}").unwrap_or_default());
     if git_root(&cwd).is_some() {
-        spawn(&cfg.scripts.join("float-tool.sh"), &[caller, "git"]);
+        float_tool(caller, "tool:git", &cwd, &format!("exec lazygit -p {}", sh_quote(&cwd)));
         return None;
     }
     let repos = find_repos(std::path::Path::new(&cwd), 2);
@@ -210,16 +252,3 @@ pub fn cmd_pickrepo(file: &str) {
     crate::picker::cmd_pickrepo(file);
 }
 
-/// 后台跑一个脚本，不等它
-pub fn spawn(prog: &std::path::Path, args: &[&str]) {
-    use std::process::Stdio;
-    if let Ok(mut c) = std::process::Command::new(prog)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        std::thread::spawn(move || c.wait()); // 收尸：轨迹常驻，不收会留僵尸进程
-    }
-}

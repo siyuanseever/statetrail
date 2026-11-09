@@ -277,11 +277,15 @@ impl Trail {
                 self.kick_usage(true, tx);
             }
             "git" => {
-                if let Some(m) = open::git_button(&self.target, &self.cfg) {
+                if let Some(m) = open::git_button(&self.target) {
                     self.say(m, Duration::from_secs(5));
                 }
             }
-            "files" => open::spawn(&self.cfg.scripts.join("float-tool.sh"), &[&self.target, "files"]),
+            "files" => {
+                if let Some(m) = open::files_button(&self.target) {
+                    self.say(m, Duration::from_secs(5));
+                }
+            }
             "close" => open::close(&self.target), // 连同自己一起关掉；记下是你关的，常驻进程不再自动开
             "narrow" | "wide" => self.toggle_width(),
             "search" => self.open_search(),
@@ -1215,7 +1219,8 @@ fn run_loop(
             };
             s.up_at = (slot > 0 && counts.0 > 0).then_some((head.len(), slot));
             let accts = [claude::current_account(&s.cfg_dir), claude::short_account(&s.cfg_dir)];
-            s.hot = header::hot_spots_after(&head, &accts, s.rows.len());
+            // 账号名能点（换账号）只在装了 claude-tmux-sessions 的 switch_account.py 时：第一版不带换账号
+            s.hot = if crate::script("switch_account.py").is_some() { header::hot_spots_after(&head, &accts, s.rows.len()) } else { Vec::new() };
             let mut head = head;
             let found: Vec<ui::Found> = s
                 .found()

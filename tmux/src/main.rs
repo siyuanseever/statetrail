@@ -101,6 +101,16 @@ fn default_scripts() -> PathBuf {
         .unwrap_or_else(|| home().join("projects/claude-tmux-sessions/bin"))
 }
 
+/// claude-tmux-sessions 里的一个脚本（usage-refresh.py、switch_account.py），没装就是 None，用到它的功能就不出现。
+/// STATETRAIL_TMUX_STANDALONE=1 时当成都没装（试单独装的样子）。
+pub fn script(name: &str) -> Option<PathBuf> {
+    if std::env::var_os("STATETRAIL_TMUX_STANDALONE").is_some_and(|v| v == "1") {
+        return None;
+    }
+    let p = if name == "usage-refresh.py" { home().join(".claude/hooks").join(name) } else { config().scripts.join(name) };
+    p.exists().then_some(p)
+}
+
 /// 这个程序自己（开轨迹窗格时让它跑这个路径；换了新版本它会发现、原地换上）
 pub fn exe() -> PathBuf {
     std::env::current_exe().unwrap_or_else(|_| PathBuf::from("statetrail-tmux"))
@@ -145,10 +155,7 @@ fn live_file(cfg_dir: &Path) -> PathBuf {
 
 /// 去查一次真实额度：usage-refresh.py 自己节流（在飞的请求也算），多叫一次不会多发请求。要一两秒，调用方放线程里。
 fn live_refresh(cfg_dir: &Path, force: bool) {
-    let script = home().join(".claude/hooks/usage-refresh.py");
-    if !script.exists() {
-        return;
-    }
+    let Some(script) = script("usage-refresh.py") else { return };
     let mut cmd = std::process::Command::new("python3");
     cmd.arg(&script);
     if force {
@@ -197,10 +204,13 @@ fn main() {
     }
     statetrail_core::set_state_dir(state_dir());
     theme::set_source(theme_source);
-    claude::set_live_source(claude::LiveSource {
-        file: live_file,
-        refresh: live_refresh,
-    });
+    // 装了 claude-tmux-sessions：额度用它的读数和刷新脚本（和它的 tmux 底栏同一份）；没装就用 core 自己的查法（和 herdr 版一样）
+    if script("usage-refresh.py").is_some() {
+        claude::set_live_source(claude::LiveSource {
+            file: live_file,
+            refresh: live_refresh,
+        });
+    }
     let cfg = config();
     i18n::init(&lang(&cfg));
     header::init_icons(&cfg.icons);
@@ -214,6 +224,19 @@ fn main() {
         Some("goto") => goto::run(&arg(1), &arg(2)),
         Some("goto-list") => goto::list(),
         Some("pickrepo") => open::cmd_pickrepo(&arg(1)),
+        Some("maybe-close") => open::maybe_close(&arg(1)),
+        Some("close-tools") => open::close_tools(&arg(1)),
+        // 开 / 关 Git、文件浮窗：statetrail-tmux tool <Claude 窗格> git|files（状态栏按钮也用它）
+        Some("tool") => {
+            let msg = match arg(2).trim_start_matches("tool:") {
+                "git" => open::git_button(&arg(1)),
+                "files" => open::files_button(&arg(1)),
+                _ => None,
+            };
+            if let Some(m) = msg {
+                tmux::message(&arg(1), &m);
+            }
+        }
         // 开发用：调 n 次 list-panes（量一次 tmux 调用的开销）
         Some("bench-tmux") => {
             for _ in 0..arg(1).parse::<usize>().unwrap_or(50) {
