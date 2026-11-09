@@ -4,6 +4,7 @@
 
 pub mod chapters;
 pub mod claude;
+pub mod detect;
 pub mod header;
 pub mod i18n;
 pub mod jump;

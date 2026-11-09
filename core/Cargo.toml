@@ -10,6 +10,7 @@ publish = false
 name = "statetrail_core"
 
 [dependencies]
+regex = { version = "1", default-features = false, features = ["std", "unicode-perl", "unicode-case", "unicode-gencat"] }
 ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
 crossterm = { version = "0.28", default-features = false, features = ["events"] }
 serde = { version = "1", features = ["derive"] }

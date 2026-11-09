@@ -8,6 +8,7 @@
 //!
 //! 和宿主无关的部分（对话记录、额度、画面、跳转、分章、搜索）在仓库根目录的 core/，herdr 版也用它。
 
+mod agents;
 mod daemon;
 mod open;
 mod pane;
@@ -208,6 +209,7 @@ fn main() {
         Some("pane") => pane::run(cfg, &arg(1)),
         Some("toggle") => open::toggle(&arg(1), &cfg),
         Some("daemon") => daemon::run(cfg),
+        Some("agents") => agents::run(arg(1) == "--once"),
         Some("pickrepo") => open::cmd_pickrepo(&arg(1)),
         // 开发用：调 n 次 list-panes（量一次 tmux 调用的开销）
         Some("bench-tmux") => {
@@ -225,7 +227,7 @@ fn main() {
             }
         }
         _ => {
-            eprintln!("usage: statetrail-tmux {{toggle <pane>|pane <claude-pane>|daemon|pickrepo <dir>|version}}");
+            eprintln!("usage: statetrail-tmux {{toggle <pane>|pane <claude-pane>|daemon|agents [--once]|pickrepo <dir>|version}}");
             std::process::exit(2);
         }
     }

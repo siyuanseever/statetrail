@@ -130,6 +130,31 @@ impl Status {
         self.data[pane]["status"].as_str().map(str::to_owned)
     }
 
+    /// 钩子记下的、还在跑的 subagent 有几个：SubagentStart 之后没等到 SubagentStop、3 小时内还有过动静。
+    /// 判据和 claude-tmux-sessions 的 effective_status.live_subagents 一样（CLAUDE_TMUX_SUBAGENT_TTL_SECS 可改）。
+    pub fn busy_subagents(&self, pane: &str, now: f64) -> usize {
+        let ttl = std::env::var("CLAUDE_TMUX_SUBAGENT_TTL_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(3.0 * 3600.0);
+        self.data[pane]["subagents"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(_, r)| {
+                let seen = r["seen_at"].as_f64().or_else(|| r["started_at"].as_f64()).unwrap_or(0.0);
+                now - seen < ttl
+            })
+            .count()
+    }
+
+    /// 钩子那边这个窗格是「做完了、还没看」（Stop 之后没被标成已读）
+    pub fn unread_done(&self, pane: &str) -> bool {
+        matches!(self.data[pane]["status"].as_str(), Some("done" | "input")) && self.data[pane]["read"] != true
+    }
+
+    /// 钩子那边这个窗格已被标成已读（picker、跳转会标）
+    pub fn read(&self, pane: &str) -> bool {
+        self.data[pane]["read"] == true
+    }
+
     /// 窗格 → 会话 id，所有知道会话的窗格（跨会话搜索时认哪些会话开着）
     pub fn sessions(&self) -> Vec<(String, String)> {
         self.data
