@@ -21,7 +21,7 @@ Rust 写的，替掉 [claude-tmux-sessions](https://github.com/siyuanseever/clau
 - **键盘。** 焦点在轨迹上时：`↑` `↓`（`k` `j`）挪，PageUp / PageDown，Home / End（`g` `G`），`←` `→`（`h` `l`）在章和轮之间，
   `Enter` 跳，`Esc` 把焦点还给 Claude。滚轮挪选中，不跳。鼠标点轨迹焦点就到轨迹上（和 herdr 插件一样）。
 - **上下还有几轮。** 列表比窗格长时，上面写「▲ 12」、下面写「▼ 5」，点一下翻一屏。
-- **窄版 / 宽版。** 默认开窄版（17 列，和 herdr 插件一样）；表头第一个按钮 `«` 放宽，`»` 收回窄版。
+- **宽版 / 窄版。** 默认开宽版；表头第一个按钮 `»` 收成 17 列的窄版，`«` 放回宽版。
 - **表头。** 模型、effort、账号，`ctx` `5h` `7d` 三条柱子（平时灰，超出匀速线才上色）和重置倒计时；点柱子马上查一次额度。
   按钮布局和 herdr 插件一样：最上面一行 宽窄、到最底、刷新额度（宽版后面写读数多新）；
   最底下一行 Git（宽版后面是没提交的文件数）、文件。
@@ -79,7 +79,7 @@ statetrail-tmux search <词…> --json [--since <ISO 时间>] [--cwd <前缀>] [
 
 ```toml
 auto_open = true          # 窗口够宽时自动开（tmux 选项 @trail_auto 0 也能关）
-default_mode = "narrow"   # 自动开出来多宽："narrow"（17 列，默认，和 herdr 插件一样）或 "wide"
+default_mode = "wide"     # 自动开出来多宽："wide"（默认）或 "narrow"（17 列）
 button_mode = "wide"      # 点状态栏的轨迹按钮（或 prefix T）开出来多宽，默认宽版
 width = 0.34              # 宽版占 Claude 那一格的比例
 min_width = 120           # Claude 那一格至少这么宽才自动开

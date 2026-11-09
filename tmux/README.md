@@ -22,7 +22,7 @@ the tmux layer.
 - **Keyboard.** `↑` `↓` / `k` `j`, PageUp / PageDown, Home / End, `←` `→` between chapters and turns, `Enter` jumps,
   `Esc` gives focus back to Claude. The wheel moves the selection. Clicking the trail gives it focus, as in the herdr plugin.
 - **▲ 12 / ▼ 5** above and below the list when it is longer than the pane; click to page.
-- **Narrow / wide**: opens narrow (17 columns, like the herdr plugin); `«` widens it, `»` shrinks it back.
+- **Wide / narrow**: opens wide; `»` shrinks it to 17 columns, `«` widens it again.
 - **Header**: model, effort, account, `ctx` `5h` `7d` bars (grey until something needs attention) and reset countdowns.
   Buttons are laid out as in the herdr plugin: width, bottom and refresh quota on top; Git (with the number of
   uncommitted files when wide) and files at the bottom. Click the account

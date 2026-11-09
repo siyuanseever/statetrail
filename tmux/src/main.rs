@@ -72,7 +72,8 @@ pub fn config() -> Config {
     let i = |k: &str, d: i64| t.get(k).and_then(toml::Value::as_integer).unwrap_or(d);
     Config {
         auto_open: b("auto_open", true),
-        narrow_default: s("default_mode", "narrow") != "wide", // 2026-11-09 起默认窄版，和 herdr 插件一样（用户：「默认宽度有点宽了，改成跟 herdr插件里一样」）
+        // 默认宽版，自动开的也是（用户 2026-11-09 晚：「右侧侧边栏默认在所有情况下都是宽版的吧」；当天早些时候试过默认窄版）
+        narrow_default: s("default_mode", "wide") == "narrow",
         // 自己点按钮开的是要看的：默认宽版（用户 2026-11-09：「tmux底部栏的 轨迹按钮， 打开默认宽版」）；自动开的照 default_mode
         button_narrow: s("button_mode", "wide") == "narrow",
         width: t
