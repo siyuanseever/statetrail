@@ -7,7 +7,12 @@
 
 ## 1. Reddit r/ClaudeAI
 
-**已发**（2026-11-09，用户自己贴的，flair「Claude Code Workflow」）：https://www.reddit.com/r/ClaudeAI/comments/1xrn648/statetrail_statusbar_dots_for_every_claude_code/
+**单独发帖两次都没成**（2026-11-09）：第 1 版被 modbot 拦（没写怎么用 Claude 做的，链接 1xrn648）；第 2 版补上后被 Reddit 全站过滤删掉
+（新账号 karma 低、当时邮箱没验证；r/ClaudeAI 现在要 karma ≥ 50 才能单独发帖）。用户随后验证了邮箱。
+**改发在每周展示帖里的评论（成功，带动图）**：r/ClaudeAI「Show us what you've created with Claude!」（11-04 那期，Built with Claude），
+评论正文 = 标题一行 + 第 2 版纯文本（去掉 Markdown）。先误发在一个 3 个月前的故障 Megathread 里，已删。
+同一期里的同类项目：Qosmopol（所有 Claude Code 会话画成星图，等你的红色闪烁，读本地会话文件，桌面应用/浏览器里）、
+Apiarius、Mirador、Smif、muster。我们的区别：长在 tmux 里、轨迹点一轮跳过去、跨会话搜你说过的话。
 发的时候的基线：stars=0 forks=0 watchers=0 views14d=30/11 tmux-v0.1.0 downloads=14。一两天后对比 star、访问、来源、下载。
 
 **标题**：statetrail: status-bar dots for every Claude Code session in tmux (which one is blocked, done, running)
