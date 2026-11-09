@@ -77,8 +77,8 @@ is blocked on me. statetrail puts a coloured dot per Claude in the status bar (r
 all of them, and a sidebar with the session's turns where clicking a turn scrolls Claude to it.
 
 How it knows the state: it reads each pane's screen with the Claude detection rules from herdr (Apache-2.0, credited
-in the repo), and combines that with the session files Claude Code itself writes (`busy`/`idle`). No hooks. Rust,
-macOS and Linux, tmux 3.2+.
+in the repo), and combines that with the session files Claude Code itself writes (busy/idle). No hooks. Rust,
+macOS and Linux, tmux 3.2+. It was built with Claude Code.
 
 The things I'm least sure about: the "done but you haven't looked" state relies on tmux client focus, and long-lived
 background shells are deliberately not counted as running. Happy to hear where that's wrong for you.
@@ -109,7 +109,7 @@ State detection reuses herdr's Claude rules (credited, Apache-2.0). https://gith
 
 ## 6. V2EX（分享创造）
 
-**标题**：在 tmux 里同时开了二十个 Claude Code，做了个状态栏告诉我哪个在等我
+**标题**：statetrail：在 tmux 状态栏上看每个 Claude Code 会话在等你、做完还是在跑（开源）
 
 **配图**：动图
 
@@ -117,8 +117,7 @@ State detection reuses herdr's Claude rules (credited, Apache-2.0). https://gith
 
 **正文**：
 
-我平时在 tmux 里开很多个 Claude Code，最头疼的不是它们干得怎么样，而是不知道哪个卡在权限框上等我、哪个已经做完了。
-于是做了 statetrail：
+我在 tmux 里同时开很多个 Claude Code，需要一眼看出哪个卡在权限框上等我、哪个已经做完。statetrail 做了这几件事：
 
 - tmux 状态栏上每个 Claude 一个圆点，按 session 分组：红的在等你，绿的做完了你还没看，黄的在跑，灰的看过了。点圆点直接跳过去。
 - `prefix g` 弹一个浮窗，按 session 列出所有 Claude：这个状态多久了、开场让它干什么、右边是实时画面。
@@ -126,7 +125,7 @@ State detection reuses herdr's Claude rules (credited, Apache-2.0). https://gith
 - 搜你说过的话：轨迹里按 `/` 搜这个会话，再按 `Tab` 搜本机所有会话，结果按会话分组，回车直接跳过去（没开的会新开窗口接着聊）。
 
 状态是看每个窗格的屏幕认的（用的是 herdr 的识别规则），再加上 Claude Code 自己写的会话文件，不用装钩子、不改 settings.json。
-Rust 写的单个程序，macOS / Linux，一行 curl 装好，tmux.conf 加一行。
+Rust 写的单个程序，用 Claude Code 写的，macOS / Linux，一行 curl 装好，tmux.conf 加一行。
 
 https://github.com/siyuanseever/statetrail
 
