@@ -31,7 +31,7 @@ pub struct Session {
 }
 
 fn index_path() -> PathBuf {
-    crate::state_dir().join("search").join("index.v2.jsonl") // v2：去掉了脚本跑的会话；v1 那份删掉
+    crate::state_dir().join("search").join("index.v3.jsonl") // v3：Claude 干活时插进来的话也算一轮（v2 那份删掉）；v2：去掉了脚本跑的会话
 }
 
 /// 所有账号目录下的会话记录：<配置目录>/projects/<项目>/<会话>.jsonl（子 Agent 的在更深一层，不算）
@@ -124,7 +124,9 @@ fn parse(cfg_dir: &Path, path: &Path, size: u64, mtime: u64) -> Session {
 
 /// 读索引、重读变了的会话、存回去；progress(已读, 要重读的总数)。返回有你说过话的会话，最近改过的在前。
 pub fn update(mut progress: impl FnMut(usize, usize)) -> Vec<Session> {
-    let _ = std::fs::remove_file(crate::state_dir().join("search").join("index.jsonl"));
+    for old in ["index.jsonl", "index.v2.jsonl"] {
+        let _ = std::fs::remove_file(crate::state_dir().join("search").join(old));
+    }
     let mut old = load();
     let mut stale = Vec::new();
     let mut all = Vec::new();

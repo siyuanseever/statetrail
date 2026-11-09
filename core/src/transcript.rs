@@ -52,6 +52,22 @@ struct Raw<'a> {
     timestamp: Option<Cow<'a, str>>,
     #[serde(rename = "aiTitle", borrow, default)]
     ai_title: Option<Cow<'a, str>>,
+    #[serde(borrow, default)]
+    attachment: Option<Attach<'a>>,
+}
+
+/// Claude 干活时你插进来的话：{"type": "attachment", "attachment": {"type": "queued_command", "prompt": "…",
+/// "commandMode": "prompt", "humanTurn": true}}。界面上是「The user sent a new message while you were working」。
+#[derive(Deserialize)]
+struct Attach<'a> {
+    #[serde(rename = "type", borrow, default)]
+    kind: Option<Cow<'a, str>>,
+    #[serde(borrow, default)]
+    prompt: Option<Cow<'a, str>>,
+    #[serde(rename = "commandMode", borrow, default)]
+    mode: Option<Cow<'a, str>>,
+    #[serde(rename = "humanTurn", default)]
+    human: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -181,6 +197,17 @@ fn slash_command(text: &str) -> bool {
 
 /// 这一条开始了新的一轮吗：(kind, 文字)。规则和 Python 版 _trigger 一样。
 fn trigger(e: &Raw) -> Option<(&'static str, String)> {
+    // Claude 干活时插进来的话也是你说的一轮（2026-11-09：「我的意思是不要我提醒， 你来直接当这个路由」这样的话搜不到）
+    if e.kind.as_deref() == Some("attachment")
+        && e.sidechain != Some(true)
+        && let Some(a) = &e.attachment
+        && a.kind.as_deref() == Some("queued_command")
+        && a.mode.as_deref().is_none_or(|m| m == "prompt")
+        && a.human != Some(false)
+    {
+        let text = a.prompt.as_deref().unwrap_or("").trim();
+        return (!text.is_empty()).then(|| ("human", text.chars().take(PROMPT_MAX).collect()));
+    }
     if e.kind.as_deref() != Some("user") || e.sidechain == Some(true) {
         return None;
     }
@@ -365,5 +392,38 @@ impl Transcript {
     /// 侧栏列出的轮次：Claude 什么都没说的通知 / 消息那一轮不列；你说的话还没有回复（还在干、或被打断）的照样列。
     pub fn visible(&self) -> Vec<&Stop> {
         self.stops.iter().filter(|s| s.has_text || s.kind == "human").collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(lines: &[&str]) -> Vec<(String, String)> {
+        let dir = std::env::temp_dir().join(format!("st-tr-{}-{}", std::process::id(), lines.len()));
+        let _ = std::fs::create_dir_all(&dir);
+        let f = dir.join("t.jsonl");
+        std::fs::write(&f, lines.join("\n") + "\n").unwrap();
+        let mut tr = Transcript::new(&f);
+        tr.update();
+        let out = tr.visible().iter().map(|s| (s.prompt.clone(), s.reply.clone())).collect();
+        let _ = std::fs::remove_dir_all(&dir);
+        out
+    }
+
+    /// 干活时插进来的话（queued_command）单独算一轮，后面的回复归它；排队记录（queue-operation）不算
+    #[test]
+    fn queued_message_is_a_turn() {
+        let got = parse(&[
+            r#"{"type":"user","uuid":"u1","timestamp":"2026-11-09T09:40:00Z","origin":{"kind":"human"},"message":{"role":"user","content":"整理路由脚本"}}"#,
+            r#"{"type":"assistant","uuid":"a1","message":{"role":"assistant","content":[{"type":"text","text":"在看了"}]}}"#,
+            r#"{"type":"queue-operation","operation":"enqueue","timestamp":"2026-11-09T09:47:15Z","content":"我的意思是不要我提醒， 你来直接当这个路由"}"#,
+            r#"{"type":"attachment","uuid":"q1","timestamp":"2026-11-09T09:47:15Z","attachment":{"type":"queued_command","prompt":"我的意思是不要我提醒， 你来直接当这个路由","commandMode":"prompt","humanTurn":true}}"#,
+            r#"{"type":"assistant","uuid":"a2","message":{"role":"assistant","content":[{"type":"text","text":"明白，我直接当路由"}]}}"#,
+            r#"{"type":"attachment","uuid":"f1","attachment":{"type":"file","prompt":"不是你说的话"}}"#,
+        ]);
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert_eq!(got[0], ("整理路由脚本".into(), "在看了".into()));
+        assert_eq!(got[1], ("我的意思是不要我提醒， 你来直接当这个路由".into(), "明白，我直接当路由".into()));
     }
 }
