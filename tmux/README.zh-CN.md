@@ -63,7 +63,8 @@ run-shell '~/.local/bin/statetrail-tmux init'
 
 ```toml
 auto_open = true          # 窗口够宽时自动开（tmux 选项 @trail_auto 0 也能关）
-default_mode = "narrow"   # 开出来多宽："narrow"（17 列，默认，和 herdr 插件一样）或 "wide"
+default_mode = "narrow"   # 自动开出来多宽："narrow"（17 列，默认，和 herdr 插件一样）或 "wide"
+button_mode = "wide"      # 点状态栏的轨迹按钮（或 prefix T）开出来多宽，默认宽版
 width = 0.34              # 宽版占 Claude 那一格的比例
 min_width = 120           # Claude 那一格至少这么宽才自动开
 shell_height = 8          # 上面那条命令行的行数，0 不开（tmux 选项 @trail_shell_height 优先）

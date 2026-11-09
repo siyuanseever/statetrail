@@ -43,12 +43,13 @@ fn shell_height(cfg: &Config) -> i64 {
 }
 
 /// 在 caller（Claude 窗格）右边开轨迹，上面切一条命令行。窗口里已经有队友：改成浮在右边，不挤领队。
-pub fn open(caller: &str, cfg: &Config) -> Option<String> {
+/// narrow：开窄版（17 列）还是宽版（配置的比例）。常驻进程自动开用 default_mode，点按钮开用 button_mode。
+pub fn open(caller: &str, cfg: &Config, narrow: bool) -> Option<String> {
     let cmd = format!("exec {} pane {caller}", sh_quote(&crate::exe().to_string_lossy()));
     if tiled_claudes(caller) > 1 {
         return open_float(caller, &cmd);
     }
-    let size = if cfg.narrow_default {
+    let size = if narrow {
         NARROW.to_string()
     } else {
         format!("{}%", (cfg.width * 100.0).round() as i64)
@@ -134,7 +135,7 @@ pub fn toggle(caller: &str, cfg: &Config) {
         return;
     }
     tmux::unset_opt(caller, "@trail_off");
-    let _ = open(caller, cfg);
+    let _ = open(caller, cfg, cfg.button_narrow);
 }
 
 // ---- Git 按钮：不在仓库里时先选仓库 ------------------------------------------------------

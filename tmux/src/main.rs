@@ -53,6 +53,7 @@ fn config_table() -> toml::Table {
 pub struct Config {
     pub auto_open: bool,
     pub narrow_default: bool,
+    pub button_narrow: bool, // 点状态栏的轨迹按钮（或 prefix T）开的那个用窄版；默认宽版（button_mode）
     pub width: f64,      // 宽版占窗口的比例
     pub min_width: i64,  // Claude 窗格至少这么宽才自动开
     pub shell_height: i64,
@@ -71,6 +72,8 @@ pub fn config() -> Config {
     Config {
         auto_open: b("auto_open", true),
         narrow_default: s("default_mode", "narrow") != "wide", // 2026-11-09 起默认窄版，和 herdr 插件一样（用户：「默认宽度有点宽了，改成跟 herdr插件里一样」）
+        // 自己点按钮开的是要看的：默认宽版（用户 2026-11-09：「tmux底部栏的 轨迹按钮， 打开默认宽版」）；自动开的照 default_mode
+        button_narrow: s("button_mode", "wide") == "narrow",
         width: t
             .get("width")
             .and_then(toml::Value::as_float)

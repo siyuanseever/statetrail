@@ -174,7 +174,7 @@ impl Daemon {
                     && !p.off
                     && self.st.session(pid).is_some()
                 {
-                    let _ = open::open(pid, cfg);
+                    let _ = open::open(pid, cfg, cfg.narrow_default);
                 }
             }
         }

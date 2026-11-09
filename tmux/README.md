@@ -63,7 +63,7 @@ From a checkout: `cd tmux && ./install.sh` builds into `tmux/bin/` and links `~/
 ## Configuration
 
 `~/.config/statetrail-tmux/config.toml`; see [README.zh-CN.md](README.zh-CN.md#配置) for every key
-(`auto_open`, `default_mode`, `width`, `min_width`, `shell_height`, `chapters`, `live_usage`, `icons`, `lang`, `scripts`, `[theme]`).
+(`auto_open`, `default_mode`, `button_mode`, `width`, `min_width`, `shell_height`, `chapters`, `live_usage`, `icons`, `lang`, `scripts`, `[theme]`).
 
 ## Memory and CPU
 
