@@ -24,6 +24,8 @@ prompt, or forgetting which one had finished. So I built statetrail:
   and a live preview.
 - **A trail** docked next to the Claude you're looking at: one row per turn, grouped into chapters. Click a turn and
   Claude's own screen scrolls to it.
+- **Search what you said**: `/` in the trail filters this session, `Tab` searches every session on the machine,
+  grouped by session; Enter jumps there (or resumes it in a new window if it isn't open).
 
 State comes from reading each pane's screen plus the session files Claude Code writes, so there are no hooks and
 nothing added to `settings.json`. It's a single Rust binary; install is one curl line plus one line in tmux.conf.
@@ -116,6 +118,7 @@ State detection reuses herdr's Claude rules (credited, Apache-2.0). https://gith
 - tmux 状态栏上每个 Claude 一个圆点，按 session 分组：红的在等你，绿的做完了你还没看，黄的在跑，灰的看过了。点圆点直接跳过去。
 - `prefix g` 弹一个浮窗，按 session 列出所有 Claude：这个状态多久了、开场让它干什么、右边是实时画面。
 - 每个 Claude 旁边一条「轨迹」：一轮一行，按任务分章，点哪一轮 Claude 就滚到哪一轮。
+- 搜你说过的话：轨迹里按 `/` 搜这个会话，再按 `Tab` 搜本机所有会话，结果按会话分组，回车直接跳过去（没开的会新开窗口接着聊）。
 
 状态是看每个窗格的屏幕认的（用的是 herdr 的识别规则），再加上 Claude Code 自己写的会话文件，不用装钩子、不改 settings.json。
 Rust 写的单个程序，macOS / Linux，一行 curl 装好，tmux.conf 加一行。

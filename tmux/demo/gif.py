@@ -3,6 +3,7 @@
 
     python3 tmux/demo/gif.py            → tmux/docs/demo.gif（各帧在 $TMPDIR/statetrail-tmux-gif/）
     python3 tmux/demo/gif.py --stage    只搭好不录，留着手动看：tmux -L sttouter attach
+    python3 tmux/demo/gif.py --search   另截一张跨会话搜索：在轨迹里按 / 打「photo」再按 Tab → tmux/docs/search.png
 
 怎么做的：两个私有 tmux server。里面那个（-L sttdemo）用假 $HOME（/private/tmp/sttdemo）、空配置加一行
 `run-shell 'statetrail-tmux init'`，和用户装好的样子一样；四个 session 里跑 fake_claude.py。外面那个（-L sttouter）
@@ -171,6 +172,25 @@ def main():
     if sh("defaults", "read", "com.google.Chrome", "GenAILocalFoundationalModelSettings").strip() != "1":
         raise SystemExit("先设 Chrome 策略，免得它下载本地 AI 模型：defaults write com.google.Chrome GenAILocalFoundationalModelSettings -int 1")
     sids = stage()
+    if "--search" in sys.argv:
+        try:
+            tx = find("Build the CLI")[0] - 4
+            click(tx + 6, 12)                                        # 点一下轨迹：焦点给它
+            time.sleep(0.8)
+            keys("/")
+            for ch in "photo":
+                sh(*OUTER, "send-keys", "-t", "outer", "-l", ch)
+                time.sleep(0.1)
+            time.sleep(0.8)
+            keys("Tab")                                              # 搜本机所有会话
+            time.sleep(3)
+            shot(0)
+            shutil.copy(frames[-1][0], ROOT / "tmux" / "docs" / "search.png")
+            print(ROOT / "tmux" / "docs" / "search.png")
+        finally:
+            sh(*OUTER, "kill-server")
+            sh(*INNER, "kill-server")
+        return
     if STAGE:
         print("搭好了：tmux -L sttouter attach；收掉：tmux -L sttouter kill-server; tmux -L sttdemo kill-server")
         return

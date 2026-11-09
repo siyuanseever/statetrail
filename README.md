@@ -10,9 +10,11 @@ session.**
 <p align="center"><sub>Real tmux and the real program; the Claude sessions and their data are a demo rig
 (<a href="tmux/demo/">tmux/demo</a>).</sub></p>
 
-| A dot per Claude; the red one waits for you | `prefix g`: every Claude by session | Click a turn: Claude scrolls there |
-|---|---|---|
-| ![Status bar dots and the trail beside Claude](tmux/docs/statusbar-trail.png) | ![Popup listing every Claude by session with state, age, task and live preview](tmux/docs/goto.png) | ![After clicking turn 3 in the trail, Claude shows that turn's reply](tmux/docs/jump.png) |
+| A dot per Claude; the red one waits for you | `prefix g`: every Claude by session |
+|---|---|
+| ![Status bar dots and the trail beside Claude](tmux/docs/statusbar-trail.png) | ![Popup listing every Claude by session with state, age, task and live preview](tmux/docs/goto.png) |
+| **Click a turn: Claude scrolls there** | **`/` then `Tab`: search what you said in every session** |
+| ![After clicking turn 3 in the trail, Claude shows that turn's reply](tmux/docs/jump.png) | ![Search results grouped by session, the matching word highlighted](tmux/docs/search.png) |
 
 [简体中文](README.zh-CN.md)
 

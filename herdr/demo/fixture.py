@@ -87,11 +87,12 @@ OTHERS = [
 ]
 
 
-def small(sid, ask, reply, minutes_ago):
+def small(sid, ask, reply, minutes_ago, cwd=""):
     """别的 Claude 的对话记录：一轮就够（浮窗只看开场那句话和最后的回复）。"""
     ts = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
     z = lambda t: t.isoformat().replace("+00:00", "Z")
-    return [{"type": "user", "uuid": str(uuid.uuid4()), "sessionId": sid, "timestamp": z(ts), "origin": {"kind": "human"},
+    # cwd：真的 Claude 每条都带，跨会话搜索按它写「项目」
+    return [{"type": "user", "uuid": str(uuid.uuid4()), "sessionId": sid, "cwd": cwd, "timestamp": z(ts), "origin": {"kind": "human"},
              "message": {"role": "user", "content": ask}},
             {"type": "assistant", "uuid": str(uuid.uuid4()), "sessionId": sid, "timestamp": z(ts + timedelta(seconds=30)),
              "message": {"role": "assistant", "model": "claude-opus-5-5", "content": [{"type": "text", "text": reply}],
@@ -104,7 +105,7 @@ def transcript():
     tokens = 18_000
     for i, (ask, reply) in enumerate(TURNS):
         ts = t0 + timedelta(minutes=5 * i)
-        out.append({"type": "user", "uuid": turn_id(i), "sessionId": SID,
+        out.append({"type": "user", "uuid": turn_id(i), "sessionId": SID, "cwd": str(WORK),
                     "timestamp": ts.isoformat().replace("+00:00", "Z"), "origin": {"kind": "human"},
                     "message": {"role": "user", "content": ask}})
         tokens += 21_000
@@ -120,7 +121,7 @@ def transcript():
 def main():
     proj = HOME / ".claude" / "projects" / ("-" + str(WORK).strip("/").replace("/", "-"))
     proj.mkdir(parents=True, exist_ok=True)
-    (proj / f"{SID}.jsonl").write_text("".join(json.dumps(e) + "\n" for e in transcript()))
+    (proj / f"{SID}.jsonl").write_text("".join(json.dumps(e, separators=(",", ":")) + "\n" for e in transcript()))
     # 章名预先写好，upto 写到最后一轮：轨迹不会再去调 Haiku
     chap = HOME / ".local" / "state" / "herdr" / "plugins" / "statetrail" / "chapters"
     chap.mkdir(parents=True, exist_ok=True)
@@ -136,7 +137,7 @@ def main():
         pj = HOME / ".claude" / "projects" / ("-" + str(d).strip("/").replace("/", "-"))
         pj.mkdir(parents=True, exist_ok=True)
         f = pj / f"{sid}.jsonl"
-        f.write_text("".join(json.dumps(e) + "\n" for e in small(sid, ask, "On it.", 20 + 37 * k)))
+        f.write_text("".join(json.dumps(e, separators=(",", ":")) + "\n" for e in small(sid, ask, "On it.", 20 + 37 * k, str(d))))
         t = time.time() - 60 * (3 + 41 * k)            # 浮窗里「多久」按记录最后修改算：错开一点
         os.utime(f, (t, t))
         lines.append("\t".join([sid, str(f), ws, str(d), title, state]))

@@ -8,9 +8,11 @@
 
 <p align="center"><sub>真 tmux、真程序；Claude 和它们的数据是演示装置（<a href="tmux/demo/">tmux/demo</a>）。</sub></p>
 
-| 每个 Claude 一个圆点，红的在等你 | `prefix g`：按 session 列出所有 Claude | 点一轮：Claude 滚到那里 |
-|---|---|---|
-| ![状态栏圆点和 Claude 旁边的轨迹](tmux/docs/statusbar-trail.png) | ![浮窗按 session 列出所有 Claude：状态、多久、在做什么、实时画面](tmux/docs/goto.png) | ![在轨迹里点第 3 轮后，Claude 显示那一轮的回复](tmux/docs/jump.png) |
+| 每个 Claude 一个圆点，红的在等你 | `prefix g`：按 session 列出所有 Claude |
+|---|---|
+| ![状态栏圆点和 Claude 旁边的轨迹](tmux/docs/statusbar-trail.png) | ![浮窗按 session 列出所有 Claude：状态、多久、在做什么、实时画面](tmux/docs/goto.png) |
+| **点一轮：Claude 滚到那里** | **`/` 再按 `Tab`：搜所有会话里你说过的话** |
+| ![在轨迹里点第 3 轮后，Claude 显示那一轮的回复](tmux/docs/jump.png) | ![搜索结果按会话分组，命中的词高亮](tmux/docs/search.png) |
 
 [English](README.md)
 
