@@ -1,6 +1,6 @@
 # statetrail for tmux：推广稿（草稿，发之前逐条给你看原文、你说「发」才发）
 
-图都用仓库里的：动图 `tmux/docs/demo.gif`，截图 `tmux/docs/statusbar-trail.png`、`goto.png`、`jump.png`。
+每条下面嵌着发的时候配的图（就是仓库里的 `tmux/docs/` 那几张），看到的就是发出去的样子。
 链接一律用 https://github.com/siyuanseever/statetrail 。
 
 ---
@@ -9,7 +9,11 @@
 
 **标题**：I run ~20 Claude Code sessions in tmux, so I made the status bar tell me which one needs me
 
-**正文**（附动图）：
+**配图**：动图
+
+![](../../tmux/docs/demo.gif)
+
+**正文**：
 
 I keep a lot of Claude Code sessions open across tmux sessions, and I kept missing the one sitting on a permission
 prompt, or forgetting which one had finished. So I built statetrail:
@@ -34,7 +38,11 @@ Feedback welcome, especially if the dot gets a state wrong for you.
 
 **标题**：Status bar dots for every Claude Code session (click to jump), plus a per-session turn sidebar
 
-**正文**（附 statusbar-trail.png）：
+**配图**：状态栏圆点 + 轨迹
+
+![](../../tmux/docs/statusbar-trail.png)
+
+**正文**：
 
 If you run coding agents in tmux: this puts one dot per Claude Code instance into your status bar, coloured by state
 (waiting for you / done / running / seen), grouped by session. Clicking a dot switches the client to that pane,
@@ -53,7 +61,9 @@ https://github.com/siyuanseever/statetrail
 
 **标题**：Show HN: Statetrail – See which Claude Code session needs you, from the tmux status bar
 
-**链接**：https://github.com/siyuanseever/statetrail
+**链接**：https://github.com/siyuanseever/statetrail （HN 不能贴图，点进去看到的是仓库首页，首页第一屏就是这张动图）
+
+![](../../tmux/docs/demo.gif)
 
 **第一条评论（自己发）**：
 
@@ -81,6 +91,10 @@ background shells are deliberately not counted as running. Happy to hear where t
 
 ## 5. herdr Discord / 讨论区（statetrail 帖子下面回一条）
 
+**配图**：跳转浮窗
+
+![](../../tmux/docs/goto.png)
+
 statetrail now has a tmux version too: the same trail and goto popup, plus a dot per Claude in the tmux status bar.
 State detection reuses herdr's Claude rules (credited, Apache-2.0). https://github.com/siyuanseever/statetrail
 
@@ -90,7 +104,11 @@ State detection reuses herdr's Claude rules (credited, Apache-2.0). https://gith
 
 **标题**：在 tmux 里同时开了二十个 Claude Code，做了个状态栏告诉我哪个在等我
 
-**正文**（附动图）：
+**配图**：动图
+
+![](../../tmux/docs/demo.gif)
+
+**正文**：
 
 我平时在 tmux 里开很多个 Claude Code，最头疼的不是它们干得怎么样，而是不知道哪个卡在权限框上等我、哪个已经做完了。
 于是做了 statetrail：
@@ -109,6 +127,12 @@ https://github.com/siyuanseever/statetrail
 ---
 
 ## 7. 知乎（想法，短）
+
+**配图**：三张截图
+
+![](../../tmux/docs/statusbar-trail.png)
+![](../../tmux/docs/goto.png)
+![](../../tmux/docs/jump.png)
 
 在 tmux 里同时跑一堆 Claude Code 的话，可以试试我做的 statetrail：状态栏上每个 Claude 一个圆点，红的就是在等你确认，
 点一下跳过去；`prefix g` 列出所有会话；旁边的轨迹点一轮就让 Claude 滚到那一轮。不用钩子，一行装好。
