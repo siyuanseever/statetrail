@@ -69,6 +69,14 @@ run-shell 'statetrail-tmux init'
 
 第 1–4 步做完再推广。第 5 步和推广可以同时走。
 
+**进度（2026-11-09）**
+- 第 1 步做完，等你实际用一天：浮窗共用代码 `354c140`，tmux 版 `dd3a406`，`prefix g` 已换。
+- 第 2 步做完：`1784e0b`。会话 id 和状态不再靠钩子，钩子的状态文件只当退路。
+- 第 3 步还要处理三处 claude-tmux-sessions 的脚本，tmux 版还在调它们：
+  - `float-tool.sh`：Git、文件浮窗，并进 Rust。
+  - `usage-refresh.py`：查实时额度，改用 core 里 herdr 版那套 Rust 查法。
+  - `switch_account.py`：换账号，不进第一版。脚本在就显示，不在就不显示。
+
 ## 推广
 
 发之前，每条发出去的文字都先给你看原文。
