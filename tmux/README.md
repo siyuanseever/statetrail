@@ -20,7 +20,7 @@ the tmux layer.
 - **Search.** `/` when the trail has focus filters this session; `Tab` searches everything you
   said in every session on this machine. Open sessions are switched to; closed ones resume in a new window.
 - **Keyboard.** `↑` `↓` / `k` `j`, PageUp / PageDown, Home / End, `←` `→` between chapters and turns, `Enter` jumps,
-  `Esc` gives focus back to Claude. The wheel moves the selection. Clicking the trail does not steal focus.
+  `Esc` gives focus back to Claude. The wheel moves the selection. Clicking the trail gives it focus, as in the herdr plugin.
 - **▲ 12 / ▼ 5** above and below the list when it is longer than the pane; click to page.
 - **Narrow / wide**: opens narrow (17 columns, like the herdr plugin); `«` widens it, `»` shrinks it back.
 - **Header**: model, effort, account, `ctx` `5h` `7d` bars (grey until something needs attention) and reset countdowns.

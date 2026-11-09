@@ -4,7 +4,7 @@
 //!   @trail_for <Claude 窗格>   打在轨迹窗格上
 //!   @trail_shell <Claude 窗格> 打在轨迹上面那条命令行上（不算侧栏，也不算「窗口里又多了一格」）
 //!   @trail_off 1              打在 Claude 窗格上：你关过，常驻进程就不再自动开
-//!   @nofocus 1                点轨迹不抢焦点（tmux.conf.local 的 MouseDown1Pane 认它，只转发点击）
+//!   （不再打 @nofocus：2026-11-09 用户要鼠标点轨迹能选中它，和 herdr 插件一样；Esc 把焦点还给 Claude）
 //!   @resurrect_skip 1         tmux-resurrect 恢复时不留空壳（bin/resurrect_hooks.py 认它）
 
 use crate::repos::{find_repos, git_root, live_dir, sh_quote};
@@ -63,7 +63,6 @@ pub fn open(caller: &str, cfg: &Config) -> Option<String> {
 
 fn mark(sb: &str, caller: &str) {
     tmux::set_opt(sb, "@trail_for", caller);
-    tmux::set_opt(sb, "@nofocus", "1");
     tmux::set_opt(sb, "@resurrect_skip", "1");
 }
 
