@@ -148,3 +148,4 @@ Esc 清掉搜索	Esc clears
 没找到 {path}	Not found: {path}
 没装 yazi（brew install yazi）	yazi is not installed (brew install yazi)
 没装 lazygit（brew install lazygit）	lazygit is not installed (brew install lazygit)
+h/l 工作区	h/l workspace

@@ -609,7 +609,6 @@ fn screen(host: &dyn Host, pane: &str) -> Vec<String> {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Chip {
     Close,
-    Level,
     All,
     Preview,
     Search,
@@ -656,10 +655,6 @@ impl Popup<'_> {
         self.list.rows().into_iter().filter(|r| matches!(r, Row::Agent(..))).collect()
     }
 
-    fn at_first(&self) -> bool {
-        self.stops().first().is_some_and(|&r| self.is_sel(r))
-    }
-
     fn is_sel(&self, r: Row) -> bool {
         match r {
             Row::Header(gi) if self.ws_mode => self.sel_ws.as_deref() == Some(self.list.groups[gi].ws.as_str()),
@@ -697,6 +692,33 @@ impl Popup<'_> {
         let i = stops.iter().position(|&r| self.is_sel(r)).unwrap_or(0) as isize;
         let j = (i + d).clamp(0, stops.len() as isize - 1) as usize;
         self.select(stops[j]);
+    }
+
+    /// h / l：选中挪到上 / 下一个工作区（tmux 的 session）的第一个 Claude；它们全收起来了就展开。
+    /// 没有「工作区那一层」：h j k l 随便按都是在 Claude 之间挪（用户 2026-11-09：「hl session 选择， jk window 选择……
+    /// 四个按键可以随意切换」）。
+    fn jump_ws(&mut self, d: isize) {
+        let n = self.list.groups.len() as isize;
+        let cur = self
+            .fix_sel()
+            .and_then(|r| match r {
+                Row::Agent(g, _) => Some(g as isize),
+                _ => None,
+            })
+            .unwrap_or(if d > 0 { -1 } else { n });
+        let mut gi = cur + d;
+        while (0..n).contains(&gi) {
+            let g = gi as usize;
+            let first_in = |l: &List| l.rows().into_iter().find(|r| matches!(r, Row::Agent(x, _) if *x == g));
+            if first_in(&self.list).is_none() && self.list.query.is_none() {
+                self.list.show_all = true; // 这个工作区的全收起来了：展开
+            }
+            if let Some(r) = first_in(&self.list) {
+                self.select(r);
+                return;
+            }
+            gi += d; // 搜索时这个工作区一个都没命中：再往前 / 往后找
+        }
     }
 
     fn set_level(&mut self, ws: bool) {
@@ -737,7 +759,6 @@ impl Popup<'_> {
         match c {
             Chip::Close => return Some(None),
             Chip::Enter => return Some(self.chosen()),
-            Chip::Level => self.set_level(!self.ws_mode),
             Chip::All => self.list.show_all = !self.list.show_all,
             Chip::Preview => {
                 self.preview = !self.preview;
@@ -767,7 +788,7 @@ impl Popup<'_> {
             (t("✕ 关闭"), Chip::Close),
             (t("j/k 选"), Chip::Plain),
             (t("数字直跳"), Chip::Plain),
-            (if self.ws_mode { t("j 回到列表") } else { t("h 工作区") }, Chip::Level),
+            (t("h/l 工作区"), Chip::Plain),
             (if self.list.show_all { t("a 收起") } else { t("a 全部") }, Chip::All),
             (t("p 预览"), Chip::Preview),
             (t("/ 搜索"), Chip::Search),
@@ -1006,14 +1027,9 @@ impl Popup<'_> {
         match k.code {
             KeyCode::Esc | KeyCode::Char('q') => return Some(None),
             KeyCode::Enter => return Some(self.chosen()),
-            // 工作区那一排：← → 挑，↓ 回到列表
-            KeyCode::Left | KeyCode::Char('h') if self.ws_mode => self.move_sel(-1),
-            KeyCode::Right | KeyCode::Char('l') if self.ws_mode => self.move_sel(1),
-            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab if self.ws_mode => self.set_level(false),
-            KeyCode::Up | KeyCode::Char('k') if self.ws_mode => {}
-            // 列表：h 或在第一个上再往上，进工作区那一排
-            KeyCode::Left | KeyCode::Char('h') => self.set_level(true),
-            KeyCode::Up | KeyCode::Char('k') if self.at_first() => self.set_level(true),
+            // h l 换工作区，j k 在 Claude 之间挪，随便按
+            KeyCode::Left | KeyCode::Char('h') => self.jump_ws(-1),
+            KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => self.jump_ws(1),
             KeyCode::Up | KeyCode::Char('k') => self.move_sel(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_sel(1),
             KeyCode::Char('p') if ctrl => self.move_sel(-1),
