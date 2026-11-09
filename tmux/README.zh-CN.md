@@ -24,11 +24,11 @@ Rust 写的，替掉 [claude-tmux-sessions](https://github.com/siyuanseever/clau
 - **窄版 / 宽版。** 默认开窄版（17 列，和 herdr 插件一样）；表头第一个按钮 `«` 放宽，`»` 收回窄版。
 - **表头。** 模型、effort、账号，`ctx` `5h` `7d` 三条柱子（平时灰，超出匀速线才上色）和重置倒计时；点柱子马上查一次额度。
   按钮布局和 herdr 插件一样：最上面一行 宽窄、到最底、刷新额度（宽版后面写读数多新）；
-  最底下一行 Git（宽版后面是没提交的文件数）、文件、命令行（在 Claude 下面切一半高的命令行，再点关掉，点外面不关）。
+  最底下一行 Git（宽版后面是没提交的文件数）、文件。
   点账号名选另一个账号，就地换（交给 claude-tmux-sessions 的 `switch_account.py`，它有安全闸）。
 - **Git、文件用浮窗**，浮在右边、点外面就关（`float-tool.sh`）。目录不在仓库里时，Git 先列出下面两层的仓库和分支，
   有改动的标 `●`，点一个再开 lazygit。
-- **和 Python 侧栏一样的 tmux 行为**：窗口够宽（≥120 列）自动开，从状态栏按钮关掉的那个不再自动开；
+- **和 Python 侧栏一样的 tmux 行为**：窗口够宽（≥120 列）自动开，从状态栏按钮关掉的那个不再自动开；上面切一条 8 行的命令行；
   窗口里有 agent teams 的队友时平铺的轨迹让开，从状态栏按钮打开时浮在右边；tmux-resurrect 恢复后不留空壳（`@resurrect_skip`）。
 - **换了新版本自己重启。** `install.sh` 换上新程序后，开着的轨迹和常驻进程几秒内原地换成新的，位置不变。
 
@@ -62,7 +62,7 @@ auto_open = true          # 窗口够宽时自动开（tmux 选项 @trail_auto 0
 default_mode = "narrow"   # 开出来多宽："narrow"（17 列，默认，和 herdr 插件一样）或 "wide"
 width = 0.34              # 宽版占 Claude 那一格的比例
 min_width = 120           # Claude 那一格至少这么宽才自动开
-shell_height = 0          # 开轨迹时在它上面切一条命令行，几行；默认 0 不切，用底部的命令行按钮（tmux 选项 @trail_shell_height 优先）
+shell_height = 8          # 上面那条命令行的行数，0 不开（tmux 选项 @trail_shell_height 优先）
 chapters = "auto"         # "auto"（Haiku 分章）/ "manual"（只按你右键标的）/ "off"
 live_usage = true         # 额度旧了（30 分钟）经 usage-refresh.py 去查；false 只读现有读数
 icons = "auto"            # "auto" / "nerd" / "unicode" / "text"

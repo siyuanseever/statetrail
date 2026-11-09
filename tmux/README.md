@@ -25,12 +25,12 @@ the tmux layer.
 - **Narrow / wide**: opens narrow (17 columns, like the herdr plugin); `«` widens it, `»` shrinks it back.
 - **Header**: model, effort, account, `ctx` `5h` `7d` bars (grey until something needs attention) and reset countdowns.
   Buttons are laid out as in the herdr plugin: width, bottom and refresh quota on top; Git (with the number of
-  uncommitted files when wide), files and a shell at the bottom (the shell opens below Claude, half its height;
-  click again to close it). Click the account
+  uncommitted files when wide) and files at the bottom. Click the account
   name to switch this Claude to another account in place (via claude-tmux-sessions' `switch_account.py`).
 - **Git and files open as floating panes** on the right. Outside a repository, Git first lists the repositories below
   with their branch and a `●` for uncommitted changes.
-- **Same tmux behaviour as the Python sidebar**: auto-opens in wide windows, remembers when you closed it, makes way for agent-teams teammates, nothing left behind after tmux-resurrect.
+- **Same tmux behaviour as the Python sidebar**: auto-opens in wide windows, remembers when you closed it, a shell above
+  it, makes way for agent-teams teammates, nothing left behind after tmux-resurrect.
 - **Restarts itself on upgrade**: after `install.sh`, open trails and the daemon switch to the new binary in place.
 
 ## Install

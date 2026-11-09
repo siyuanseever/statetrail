@@ -282,7 +282,6 @@ impl Trail {
                 }
             }
             "files" => open::spawn(&self.cfg.scripts.join("float-tool.sh"), &[&self.target, "files"]),
-            "shell" => open::toggle_shell(&self.target),
             "close" => open::close(&self.target), // 连同自己一起关掉；记下是你关的，常驻进程不再自动开
             "narrow" | "wide" => self.toggle_width(),
             "search" => self.open_search(),
@@ -892,7 +891,8 @@ impl Trail {
 }
 
 /// 按钮的布局和 herdr 插件一样（用户 2026-11-09：「UI按钮的布局呢」）：
-/// 最上面一行 « / » 切宽窄、⇊ 到最底、⟳ 刷新（宽版后面带额度多新）；最底下一行 Git、文件、命令行。
+/// 最上面一行 « / » 切宽窄、⇊ 到最底、⟳ 刷新（宽版后面带额度多新）；最底下一行 Git、文件。
+/// 命令行不做按钮：照旧在轨迹上面切一条（用户 2026-11-09 试过底部按钮后：「我还是喜欢之前的，上边直接打开一个pane来命令行」）。
 /// 搜索按 /，关掉点状态栏的轨迹按钮。每个按钮占 3 格，点偏一格也算。
 fn button_rows(narrow: bool) -> Vec<Vec<Button>> {
     let b = |name: &str, act: &str, extra: usize| (header::icon(name), act.to_owned(), extra);
@@ -903,10 +903,10 @@ fn button_rows(narrow: bool) -> Vec<Vec<Button>> {
     }
 }
 
-/// 最底下那一行：Git（宽版后面带没提交的文件数）、文件、命令行。
+/// 最底下那一行：Git（宽版后面带没提交的文件数）、文件。
 fn foot_buttons(narrow: bool) -> Vec<Button> {
     let b = |name: &str, act: &str, extra: usize| (header::icon(name), act.to_owned(), extra);
-    vec![b("git", "git", if narrow { 0 } else { 4 }), b("files", "files", 0), b("shell", "shell", 0)]
+    vec![b("git", "git", if narrow { 0 } else { 4 }), b("files", "files", 0)]
 }
 
 fn spawn_threads(tx: &Sender<Msg>, me: &str) {
