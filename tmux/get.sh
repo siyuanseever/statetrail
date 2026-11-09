@@ -15,7 +15,7 @@ case "$(uname -s)-$(uname -m)" in
     exit 1
     ;;
 esac
-tag=$(curl -fsSL "https://api.github.com/repos/$repo/releases?per_page=50" |
+tag=$(curl -fsSL --retry 4 --retry-delay 3 "https://api.github.com/repos/$repo/releases?per_page=50" |
   grep -o '"tag_name": *"tmux-v[^"]*"' | head -n 1 | sed 's/.*"\(tmux-v[^"]*\)"/\1/')
 [ -n "$tag" ] || { echo "No tmux release found on github.com/$repo"; exit 1; }
 dir=${STATETRAIL_BIN_DIR:-$HOME/.local/bin}
@@ -23,8 +23,8 @@ mkdir -p "$dir"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 url="https://github.com/$repo/releases/download/$tag/statetrail-tmux-$t.tar.gz"
-curl -fsSL "$url" -o "$tmp/a.tar.gz"
-curl -fsSL "$url.sha256" -o "$tmp/a.sha256"
+curl -fsSL --retry 4 --retry-delay 3 "$url" -o "$tmp/a.tar.gz"
+curl -fsSL --retry 4 --retry-delay 3 "$url.sha256" -o "$tmp/a.sha256"
 want=$(cut -d' ' -f1 "$tmp/a.sha256")
 got=$( (shasum -a 256 "$tmp/a.tar.gz" 2>/dev/null || sha256sum "$tmp/a.tar.gz") | cut -d' ' -f1)
 [ "$want" = "$got" ] || { echo "Checksum mismatch for $url"; exit 1; }
