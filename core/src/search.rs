@@ -161,6 +161,15 @@ pub fn find<'a>(all: &'a [Session], q: &str, limit: usize) -> Vec<(&'a Session, 
         .collect();
     out.sort_by(|a, b| b.1.ts.cmp(&a.1.ts)); // ISO 时间，按字面比就是按时间比
     out.truncate(limit);
+    // 同一个会话的连在一起：会话按它最新一条命中排，会话里按时间新的在前（画的时候每个会话前面一行会话名）
+    let mut order: Vec<&str> = Vec::new();
+    for (s, _) in &out {
+        if !order.contains(&s.sid.as_str()) {
+            order.push(&s.sid);
+        }
+    }
+    let rank = |sid: &str| order.iter().position(|x| *x == sid).unwrap_or(usize::MAX);
+    out.sort_by_key(|(s, _)| rank(&s.sid)); // 稳定排序：会话里原来的时间顺序不变
     out
 }
 
@@ -184,5 +193,38 @@ pub fn cmd_find(q: &str) {
             s.cwd,
             one
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(sid: &str, turns: &[(&str, &str)]) -> Session {
+        Session {
+            path: PathBuf::new(),
+            cfg_dir: PathBuf::new(),
+            size: 0,
+            mtime: 0,
+            sid: sid.into(),
+            cwd: String::new(),
+            title: None,
+            turns: turns
+                .iter()
+                .enumerate()
+                .map(|(n, (ts, p))| Turn { n, id: format!("{sid}{n}"), ts: Some(ts.to_string()), prompt: p.to_string() })
+                .collect(),
+        }
+    }
+
+    /// 同一个会话的连在一起，会话按最新一条命中排，会话里新的在前
+    #[test]
+    fn find_groups_sessions() {
+        let all = [
+            session("a", &[("2026-11-01", "x one"), ("2026-11-09", "x two")]),
+            session("b", &[("2026-11-05", "x three")]),
+        ];
+        let got: Vec<String> = find(&all, "x", 10).iter().map(|(s, t)| format!("{}:{}", s.sid, t.prompt)).collect();
+        assert_eq!(got, ["a:x two", "a:x one", "b:x three"]);
     }
 }

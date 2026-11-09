@@ -515,13 +515,16 @@ pub fn draw(f: &mut Frame, header: &[SLine], footer: &[SLine], v: &View, offset:
 
 /// 跨会话搜索的一条结果：你说的那句话，和它在哪（项目 · 会话标题 · 时间 · 第几轮）
 pub struct Found {
+    pub group: String, // 哪个会话（会话 id）：同一个会话的连在一起，前面一行会话名
+    pub head: String,  // 会话那一行：项目 · 会话名
     pub text: String,
-    pub meta: String,
-    pub open: bool, // 那个会话正开在某个窗格里
+    pub meta: String,  // 这一轮的时间
+    pub open: bool,    // 那个会话正开在某个窗格里
 }
 
-/// 跨会话搜索的结果盖在列表那块（top..bottom 行）上：一条两行，选中的画 ▌ 加底色，滚到选中的露出来。
-/// note 是没有结果时那一行灰字。返回每一行屏幕行是第几条（点击用）。
+/// 跨会话搜索的结果盖在列表那块（top..bottom 行）上：按会话分开（用户 2026-11-09：「全部会话的时候还是分开显示不同会话的
+/// conversation 吧」），每个会话先一行会话名，下面一轮一行（时间 + 说的话）。选中的画 ▌ 加底色，滚到选中的露出来。
+/// note 是没有结果时那一行灰字。off 是滚到第几行（含会话名那几行）。返回每一行屏幕行是第几条（点击用，会话名那行不算）。
 pub fn draw_found(f: &mut Frame, top: u16, bottom: u16, items: &[Found], sel: usize, off: &mut usize, query: &str, note: &str) -> Vec<(u16, usize)> {
     let c = colors();
     let area = f.area();
@@ -533,32 +536,52 @@ pub fn draw_found(f: &mut Frame, top: u16, bottom: u16, items: &[Found], sel: us
         f.render_widget(Paragraph::new(Line::from(Span::styled(format!("  {note}"), faint))), rect);
         return Vec::new();
     }
-    let per = (rect.height as usize / 2).max(1);
-    if sel < *off {
-        *off = sel;
-    } else if sel >= *off + per {
-        *off = sel + 1 - per;
+    let mut all: Vec<(Option<usize>, Line)> = Vec::new();
+    let mut last: Option<&str> = None;
+    for (k, it) in items.iter().enumerate() {
+        if last != Some(it.group.as_str()) {
+            if last.is_some() {
+                all.push((None, Line::raw("")));
+            }
+            let mut h = vec![Span::styled(clip(&format!("  {}", it.head), room.saturating_sub(6), true), Style::default().fg(c.cyan).add_modifier(Modifier::BOLD))];
+            if it.open {
+                h.push(Span::styled(format!(" · {}", t("开着")), Style::default().fg(c.cyan)));
+            }
+            all.push((None, Line::from(h)));
+            last = Some(&it.group);
+        }
+        let on = k == sel;
+        let lead = if on { Span::styled("▌ ", Style::default().fg(c.accent)) } else { Span::raw("  ") };
+        let meta = format!("{} ", it.meta);
+        let left = room.saturating_sub(meta.width() + 2);
+        let mut spans = vec![lead, Span::styled(meta, faint)];
+        spans.extend(mark_hit(clip(&near(&oneline(&it.text), query, left), left, true), query, Style::default()));
+        let mut line = Line::from(spans);
+        if on {
+            let used: usize = line.spans.iter().map(|s| s.content.width()).sum();
+            if used < area.width as usize {
+                line.spans.push(Span::raw(" ".repeat(area.width as usize - used)));
+            }
+            line = line.patch_style(c.selection.map_or_else(Style::default, |b| Style::default().bg(b)));
+        }
+        all.push((Some(k), line));
     }
+    let h = (rect.height as usize).max(1);
+    let at = all.iter().position(|(k, _)| *k == Some(sel)).unwrap_or(0);
+    if at < *off {
+        // 往上出了范围：连它头上的会话名一起露出来
+        *off = if at > 0 && all[at - 1].0.is_none() { at - 1 } else { at };
+    } else if at >= *off + h {
+        *off = at + 1 - h;
+    }
+    *off = (*off).min(all.len().saturating_sub(h));
     let mut lines = Vec::new();
     let mut rows = Vec::new();
-    for (k, it) in items.iter().enumerate().skip(*off).take(per) {
-        let on = k == sel;
-        let bg = if on { c.selection.map_or_else(Style::default, |b| Style::default().bg(b)) } else { Style::default() };
-        let lead = if on { Span::styled("▌ ", Style::default().fg(c.accent)) } else { Span::raw("  ") };
-        let mut a = vec![lead.clone()];
-        a.extend(mark_hit(clip(&near(&oneline(&it.text), query, room), room, true), query, Style::default()));
-        let mut b = vec![lead, Span::styled(clip(&format!("   {}", it.meta), room.saturating_sub(4), true), faint)];
-        if it.open {
-            b.push(Span::styled(format!(" · {}", t("开着")), Style::default().fg(c.cyan)));
-        }
-        for mut spans in [a, b] {
-            let used: usize = spans.iter().map(|s| s.content.width()).sum();
-            if on && used < area.width as usize {
-                spans.push(Span::raw(" ".repeat(area.width as usize - used)));
-            }
+    for (k, line) in all.into_iter().skip(*off).take(h) {
+        if let Some(k) = k {
             rows.push((top + lines.len() as u16, k));
-            lines.push(Line::from(spans).patch_style(bg));
         }
+        lines.push(line);
     }
     f.render_widget(Paragraph::new(lines), rect);
     rows
@@ -708,6 +731,47 @@ mod tests {
                 line.trim_end().to_owned()
             })
             .collect()
+    }
+
+    /// 跨会话搜索：按会话分开，每个会话前面一行会话名（开着的写「开着」），下面一轮一行；会话名那行点了不算一条
+    #[test]
+    fn found_groups_by_session() {
+        let it = |g: &str, head: &str, text: &str, open: bool| Found {
+            group: g.into(),
+            head: head.into(),
+            text: text.into(),
+            meta: "11/09 12:00".into(),
+            open,
+        };
+        let items = [it("s1", "news · 德语", "加德语", true), it("s1", "news · 德语", "德语测试", true), it("s2", "zumi · 文档", "德语文档", false)];
+        let mut term = ratatui::Terminal::new(TestBackend::new(50, 10)).unwrap();
+        let mut rows = Vec::new();
+        let mut off = 0;
+        term.draw(|f| rows = draw_found(f, 0, 10, &items, 2, &mut off, "德语", "")).unwrap();
+        let buf = term.backend().buffer().clone();
+        let lines: Vec<String> = (0..6)
+            .map(|y| {
+                let mut l = String::new();
+                let mut skip = 0;
+                for x in 0..buf.area.width {
+                    if skip > 0 {
+                        skip -= 1;
+                        continue;
+                    }
+                    let sym = buf[(x, y)].symbol();
+                    skip = sym.width().saturating_sub(1);
+                    l += sym;
+                }
+                l.trim_end().to_owned()
+            })
+            .collect();
+        assert!(lines[0].contains("news · 德语") && lines[0].contains(t("开着").as_str()), "{lines:?}");
+        assert!(lines[1].contains("12:00") && lines[1].contains("加德语"), "{lines:?}");
+        assert!(lines[2].contains("德语测试"), "{lines:?}");
+        assert_eq!(lines[3], "", "{lines:?}");
+        assert!(lines[4].contains("zumi · 文档") && !lines[4].contains(t("开着").as_str()), "{lines:?}");
+        assert!(lines[5].starts_with("▌") && lines[5].contains("德语文档"), "{lines:?}");
+        assert_eq!(rows, vec![(1, 0), (2, 1), (5, 2)]);
     }
 
     /// 宽版：章名是一条补满的实线；同一章里的轮次之间是虚线，章的最后一轮后面不画虚线

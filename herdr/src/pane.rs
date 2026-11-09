@@ -1683,13 +1683,13 @@ fn run_loop(
                 .iter()
                 .map(|(ss, tt)| {
                     let proj = Path::new(&ss.cwd).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    let mut meta = vec![proj];
-                    meta.extend(ss.title.clone());
-                    meta.push(ui::when(tt.ts.as_deref()));
-                    meta.push(t("第 {n} 轮").replace("{n}", &(tt.n + 1).to_string()));
+                    let mut head = vec![proj];
+                    head.extend(ss.title.clone());
                     ui::Found {
+                        group: ss.sid.clone(),
+                        head: head.join(" · "),
                         text: tt.prompt.clone(),
-                        meta: meta.join(" · "),
+                        meta: ui::when(tt.ts.as_deref()),
                         open: s.sid.as_deref() != Some(ss.sid.as_str()) && s.open_sids.contains_key(&ss.sid),
                     }
                 })
