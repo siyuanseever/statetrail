@@ -72,7 +72,15 @@ run-shell 'statetrail-tmux init'
 **进度（2026-11-09）**
 - 第 1 步做完，等你实际用一天：浮窗共用代码 `354c140`，tmux 版 `dd3a406`，`prefix g` 已换。
 - 第 2 步做完：`1784e0b`。会话 id 和状态不再靠钩子，钩子的状态文件只当退路。
-- 第 3 步还要处理三处 claude-tmux-sessions 的脚本，tmux 版还在调它们：
+- 第 3 步基本做完，只剩发版那一下：
+  - 不装 claude-tmux-sessions 也能用：`0ae3993`。
+  - `init` / `serve` / `click`：`98fa00a`，状态栏圆点那排 tmux 刚起时也马上出来是 `2bb6391`。
+  - CI 编 4 个平台：`7bf1e92`、`d40e1b5`。macos-14 已不支持，换成 macos-15。
+  - `get.sh` 和安装说明：`0ade3b2`。
+  - 验过的：独立的 tmux server（干净配置、单独状态目录、当成没装钩子和脚本）里 init 跑通；Ubuntu 24.04 容器（tmux 3.4）里装 CI 编的
+    Linux 包，两步装好，3 秒内出圆点，浮窗列表对，tmux 关了常驻进程自己退。
+  - 没验过：真的另一个 macOS 用户；get.sh 真下载，要等第一个 `tmux-v*` 标签发出去、合进 main 才有地址。
+- 原来第 3 步要处理的三处 claude-tmux-sessions 脚本（已处理）：
   - `float-tool.sh`：Git、文件浮窗，并进 Rust。
   - `usage-refresh.py`：查实时额度，改用 core 里 herdr 版那套 Rust 查法。
   - `switch_account.py`：换账号，不进第一版。脚本在就显示，不在就不显示。
