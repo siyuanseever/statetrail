@@ -1,4 +1,4 @@
-# tmux 版打包方案（2026-11-09，待拍板）
+# tmux 版打包方案（2026-11-09 定）
 
 ## 结论
 
@@ -81,9 +81,9 @@ run-shell 'statetrail-tmux init'
 - **中文：** V2EX、知乎。旧稿在 claude-tmux-sessions 的 `docs/promo/`，改成新产品的说法。
 - **一句话卖点（草稿）：** *See every Claude Code session in tmux at a glance — who's waiting, who's done — and jump to any turn of any session.*
 
-## 要你拍板的
+## 定下来的（2026-11-09 用户：「按推荐来」）
 
-1. **放哪个仓库、叫什么。** 推荐放 statetrail 仓库、叫 statetrail，herdr 插件市场上已经是这个名字，"state + trail"正好是圆点加轨迹。
+1. **放哪个仓库、叫什么。** 定：放 statetrail 仓库、叫 statetrail，herdr 插件市场上已经是这个名字，"state + trail"正好是圆点加轨迹。
    另一个办法是放 claude-tmux-sessions：名字已经有 1 star 和一篇文章，但仓库里一大半是 Python 自用工具，要大清理。
-2. **第一版要不要换账号。** 推荐不要：多账号的人少，它又依赖 Python 脚本。
-3. **rust 分支什么时候合进 main。** 推荐第 3 步做完、打第一个 tmux 版标签时，一起合进 main（main 只放发布）。
+2. **第一版要不要换账号。** 定：不要：多账号的人少，它又依赖 Python 脚本。
+3. **rust 分支什么时候合进 main。** 定：第 3 步做完、打第一个 tmux 版标签时，一起合进 main（main 只放发布）。
