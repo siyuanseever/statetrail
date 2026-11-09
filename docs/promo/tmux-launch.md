@@ -126,14 +126,6 @@ https://github.com/siyuanseever/statetrail
 
 ---
 
-## 7. 知乎（想法，短）
+## 7. 知乎（专栏文章）
 
-**配图**：三张截图
-
-![](../../tmux/docs/statusbar-trail.png)
-![](../../tmux/docs/goto.png)
-![](../../tmux/docs/jump.png)
-
-在 tmux 里同时跑一堆 Claude Code 的话，可以试试我做的 statetrail：状态栏上每个 Claude 一个圆点，红的就是在等你确认，
-点一下跳过去；`prefix g` 列出所有会话；旁边的轨迹点一轮就让 Claude 滚到那一轮。不用钩子，一行装好。
-https://github.com/siyuanseever/statetrail
+正式的工具分享，接着 10-24 那篇 claude-tmux-sessions 写：见 [zhihu.md](zhihu.md)。
