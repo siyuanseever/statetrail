@@ -65,7 +65,7 @@ shell_height = 8          # 上面那条命令行的行数，0 不开（tmux 选
 chapters = "auto"         # "auto"（Haiku 分章）/ "manual"（只按你右键标的）/ "off"
 live_usage = true         # 额度旧了（30 分钟）经 usage-refresh.py 去查；false 只读现有读数
 icons = "auto"            # "auto" / "nerd" / "unicode" / "text"
-lang = ""                 # "zh" / "en"；不写按系统 locale
+lang = ""                 # "zh" / "en"；不写就和 claude-tmux-sessions 一样：CLAUDE_TMUX_LANG > ~/.config/claude-tmux/lang > 中文
 scripts = "~/projects/claude-tmux-sessions/bin"   # 不写就顺着 ~/.claude/hooks/float-tool.sh 那条软链找
 
 [theme]

@@ -161,6 +161,27 @@ fn live_refresh(cfg_dir: &Path, force: bool) {
         .status();
 }
 
+/// 界面语言：配置里的 lang > 环境变量 CLAUDE_TMUX_LANG > ~/.config/claude-tmux/lang > 中文。
+/// 后两步和 claude-tmux-sessions 的 lib/i18n.sh 一样，tmux 底栏、picker 和轨迹说同一种话。
+fn lang(cfg: &Config) -> String {
+    if !cfg.lang.is_empty() {
+        return cfg.lang.clone();
+    }
+    if let Ok(v) = std::env::var("CLAUDE_TMUX_LANG")
+        && !v.trim().is_empty()
+    {
+        return v.trim().to_owned();
+    }
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home().join(".config"));
+    std::fs::read_to_string(base.join("claude-tmux/lang"))
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "zh".into())
+}
+
 fn theme_source() -> Option<toml::Table> {
     Some(config_table())
 }
@@ -179,7 +200,7 @@ fn main() {
         refresh: live_refresh,
     });
     let cfg = config();
-    i18n::init(&cfg.lang);
+    i18n::init(&lang(&cfg));
     header::init_icons(&cfg.icons);
     let args: Vec<String> = std::env::args().skip(1).collect();
     let arg = |i: usize| args.get(i).cloned().unwrap_or_default();
