@@ -59,6 +59,7 @@ struct Agents {
     st: tmux::Status,
     own: Own,
     dots: Option<String>, // 上次写进 @claude_dots 的
+    published: String,    // 上次写进 agents.json 的
     announced: bool,      // 这个 tmux server 上已经写过 @claude_agents_pid
 }
 
@@ -158,6 +159,10 @@ impl Own {
             self.attach.insert(p.shell.clone(), job);
         }
     }
+}
+
+pub fn state_file() -> std::path::PathBuf {
+    crate::state_dir().join("agents.json")
 }
 
 fn now_secs() -> f64 {
@@ -260,7 +265,33 @@ impl Agents {
         let live: HashSet<&str> = panes.iter().map(|p| p.id.as_str()).collect();
         self.agents.retain(|k, _| live.contains(k.as_str()));
         self.draw(&panes, &wins);
+        self.publish(&panes);
         true
+    }
+
+    /// 每个 Claude 的状态写进 <状态目录>/agents.json（{"%3": "run", …}），跳转浮窗读它，和圆点说的一样。变了才写。
+    fn publish(&mut self, panes: &[Pane]) {
+        let m: serde_json::Map<String, serde_json::Value> = panes
+            .iter()
+            .filter_map(|p| {
+                let s = match self.agents.get(&p.id)?.show {
+                    Show::Wait => "wait",
+                    Show::Run => "run",
+                    Show::Done => "done",
+                    Show::Read => "read",
+                };
+                Some((p.id.clone(), s.into()))
+            })
+            .collect();
+        let text = serde_json::Value::Object(m).to_string();
+        if text == self.published {
+            return;
+        }
+        let path = state_file();
+        let tmp = path.with_extension("json.tmp");
+        if std::fs::create_dir_all(crate::state_dir()).is_ok() && std::fs::write(&tmp, &text).is_ok() && std::fs::rename(&tmp, &path).is_ok() {
+            self.published = text;
+        }
     }
 
     fn draw(&mut self, panes: &[Pane], wins: &[(String, String)]) {

@@ -91,6 +91,23 @@ pub fn claude_pid(pane: &str) -> Option<u32> {
     rows.iter().find(|&&(_, ppid, name)| ppid == root && claude(name)).map(|r| r.0)
 }
 
+/// 窗格 → 会话 id，从 Claude 自己写的 <配置目录>/sessions/<进程号>.json 读（"tmux": "session:@窗口.%窗格"）。
+/// 不靠钩子：没装 claude-tmux-sessions 的钩子也认得出。进程退出时文件就删了，所以只有活着的。
+pub fn claude_sessions() -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for dir in statetrail_core::claude::config_dirs() {
+        for e in std::fs::read_dir(dir.join("sessions")).into_iter().flatten().flatten() {
+            let Some(v) = std::fs::read(e.path()).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else { continue };
+            if let (Some(t), Some(sid)) = (v["tmux"].as_str(), v["sessionId"].as_str())
+                && let Some(pane) = t.rsplit('.').next()
+            {
+                out.insert(pane.to_owned(), sid.to_owned());
+            }
+        }
+    }
+    out
+}
+
 // ---- hook 写的状态文件 -------------------------------------------------------------------
 
 /// `~/.claude/tmux-claude-status.json`：{"%窗格": {"session_id": …, "status": "running" | "blocked" | "input" | …}}。

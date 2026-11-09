@@ -14,6 +14,9 @@ mkdir -p bin
 cp target/release/statetrail-tmux bin/.statetrail-tmux.new
 mv bin/.statetrail-tmux.new bin/statetrail-tmux
 echo "installed $ROOT/bin/statetrail-tmux ($(bin/statetrail-tmux version))"
+# ~/.local/bin 里放一条软链：tmux 配置里写这一个路径，两台机器上仓库位置不同也不用改
+mkdir -p "$HOME/.local/bin"
+ln -sfn "$ROOT/bin/statetrail-tmux" "$HOME/.local/bin/statetrail-tmux"
 
 service() {   # service <label> <子命令>
   label=$1
