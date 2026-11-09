@@ -1232,8 +1232,11 @@ fn run_loop(
                 .iter()
                 .map(|(ss, tt)| {
                     let proj = Path::new(&ss.cwd).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    let mut head = vec![proj];
-                    head.extend(ss.title.clone());
+                    // 会话那一行：项目 · 会话名，缺哪个不写；都没有就写会话 id 的前 8 位（不能是空的一行）
+                    let mut head: Vec<String> = [Some(proj), ss.title.clone()].into_iter().flatten().filter(|x| !x.is_empty()).collect();
+                    if head.is_empty() {
+                        head.push(ss.sid.chars().take(8).collect());
+                    }
                     ui::Found {
                         group: ss.sid.clone(),
                         head: head.join(" · "),
