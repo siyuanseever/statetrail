@@ -563,7 +563,12 @@ impl Trail {
         }
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         match tmux::run(&refs) {
-            Some(p) => tmux::send_keys(p.trim(), &[&format!("claude --resume {sid}"), "Enter"]),
+            Some(p) => {
+                // -n 起的名字只是 Claude 设标题之前的占位：-n 会把这个窗口的自动改名关掉，打开回来，名字跟着 Claude 的终端标题走
+                // （用户 2026-11-09：「tmux windows name 怎么不会根据我的claude name 更换了呢」）
+                let _ = tmux::run(&["set", "-wu", "-t", p.trim(), "automatic-rename"]);
+                tmux::send_keys(p.trim(), &[&format!("claude --resume {sid}"), "Enter"]);
+            }
             None => self.say(t("开不了新窗口"), Duration::from_secs(4)),
         }
     }
