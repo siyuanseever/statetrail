@@ -1,0 +1,115 @@
+# statetrail for tmux：推广稿（草稿，发之前逐条给你看原文、你说「发」才发）
+
+图都用仓库里的：动图 `tmux/docs/demo.gif`，截图 `tmux/docs/statusbar-trail.png`、`goto.png`、`jump.png`。
+链接一律用 https://github.com/siyuanseever/statetrail 。
+
+---
+
+## 1. Reddit r/ClaudeAI
+
+**标题**：I run ~20 Claude Code sessions in tmux, so I made the status bar tell me which one needs me
+
+**正文**（附动图）：
+
+I keep a lot of Claude Code sessions open across tmux sessions, and I kept missing the one sitting on a permission
+prompt, or forgetting which one had finished. So I built statetrail:
+
+- **A dot per Claude in the tmux status bar**, grouped by session. Red is waiting for you (permission prompt,
+  question), green finished while you were elsewhere, gold is running, grey you've seen. Click a dot to jump there.
+- **`prefix g`** opens a popup with every Claude by session: how long it's been in that state, what it was asked,
+  and a live preview.
+- **A trail** docked next to the Claude you're looking at: one row per turn, grouped into chapters. Click a turn and
+  Claude's own screen scrolls to it.
+
+State comes from reading each pane's screen plus the session files Claude Code writes, so there are no hooks and
+nothing added to `settings.json`. It's a single Rust binary; install is one curl line plus one line in tmux.conf.
+
+https://github.com/siyuanseever/statetrail
+
+Feedback welcome, especially if the dot gets a state wrong for you.
+
+---
+
+## 2. Reddit r/tmux
+
+**标题**：Status bar dots for every Claude Code session (click to jump), plus a per-session turn sidebar
+
+**正文**（附 statusbar-trail.png）：
+
+If you run coding agents in tmux: this puts one dot per Claude Code instance into your status bar, coloured by state
+(waiting for you / done / running / seen), grouped by session. Clicking a dot switches the client to that pane,
+clicking a session name switches session. `prefix g` lists them all in a `display-popup`.
+
+The tmux side: user ranges in the status line (`#[range=user|…]`, needs tmux 3.4+ for the clicks), one global option
+(`@claude_dots`) the background process rewrites when something changes, so the bar updates without waiting for
+`status-interval`. One `tmux` call per second; a pane's screen is only captured when its window has new output.
+`run-shell 'statetrail-tmux init'` at the end of tmux.conf sets it all up and leaves bindings you've customised alone.
+
+https://github.com/siyuanseever/statetrail
+
+---
+
+## 3. Show HN
+
+**标题**：Show HN: Statetrail – See which Claude Code session needs you, from the tmux status bar
+
+**链接**：https://github.com/siyuanseever/statetrail
+
+**第一条评论（自己发）**：
+
+I run a lot of Claude Code sessions in tmux and the hard part stopped being the agents and became noticing which one
+is blocked on me. statetrail puts a coloured dot per Claude in the status bar (red = waiting for you), a popup listing
+all of them, and a sidebar with the session's turns where clicking a turn scrolls Claude to it.
+
+How it knows the state: it reads each pane's screen with the Claude detection rules from herdr (Apache-2.0, credited
+in the repo), and combines that with the session files Claude Code itself writes (`busy`/`idle`). No hooks. Rust,
+macOS and Linux, tmux 3.2+.
+
+The things I'm least sure about: the "done but you haven't looked" state relies on tmux client focus, and long-lived
+background shells are deliberately not counted as running. Happy to hear where that's wrong for you.
+
+---
+
+## 4. awesome-claude-code（提 PR / 按它的投稿方式）
+
+先看它现在的投稿规则再提。条目一行：
+
+- [statetrail](https://github.com/siyuanseever/statetrail) – tmux status-bar dots for every Claude Code session
+  (waiting / done / running), a popup to jump between them, and a per-session turn sidebar. No hooks.
+
+---
+
+## 5. herdr Discord / 讨论区（statetrail 帖子下面回一条）
+
+statetrail now has a tmux version too: the same trail and goto popup, plus a dot per Claude in the tmux status bar.
+State detection reuses herdr's Claude rules (credited, Apache-2.0). https://github.com/siyuanseever/statetrail
+
+---
+
+## 6. V2EX（分享创造）
+
+**标题**：在 tmux 里同时开了二十个 Claude Code，做了个状态栏告诉我哪个在等我
+
+**正文**（附动图）：
+
+我平时在 tmux 里开很多个 Claude Code，最头疼的不是它们干得怎么样，而是不知道哪个卡在权限框上等我、哪个已经做完了。
+于是做了 statetrail：
+
+- tmux 状态栏上每个 Claude 一个圆点，按 session 分组：红的在等你，绿的做完了你还没看，黄的在跑，灰的看过了。点圆点直接跳过去。
+- `prefix g` 弹一个浮窗，按 session 列出所有 Claude：这个状态多久了、开场让它干什么、右边是实时画面。
+- 每个 Claude 旁边一条「轨迹」：一轮一行，按任务分章，点哪一轮 Claude 就滚到哪一轮。
+
+状态是看每个窗格的屏幕认的（用的是 herdr 的识别规则），再加上 Claude Code 自己写的会话文件，不用装钩子、不改 settings.json。
+Rust 写的单个程序，macOS / Linux，一行 curl 装好，tmux.conf 加一行。
+
+https://github.com/siyuanseever/statetrail
+
+欢迎试用，状态认错了的情况特别想知道。
+
+---
+
+## 7. 知乎（想法，短）
+
+在 tmux 里同时跑一堆 Claude Code 的话，可以试试我做的 statetrail：状态栏上每个 Claude 一个圆点，红的就是在等你确认，
+点一下跳过去；`prefix g` 列出所有会话；旁边的轨迹点一轮就让 Claude 滚到那一轮。不用钩子，一行装好。
+https://github.com/siyuanseever/statetrail
