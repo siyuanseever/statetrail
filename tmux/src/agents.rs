@@ -440,8 +440,6 @@ fn run_spinner(pane: &str) -> String {
 
 /// `agents`：常驻。`agents --once`：读一遍，打印每个 Claude 的状态和命中的规则（不写 tmux）。
 pub fn run(once: bool) {
-    // 别继承「当前客户端」：Collie 这类只读控制客户端挂着时，tmux 会挑它当当前客户端，写选项会被拒（client is read-only）
-    unsafe { std::env::remove_var("TMUX") };
     let mut s = Agents::default();
     if once {
         let Some(out) = tmux::run(&["list-panes", "-a", "-F", FMT]) else { return };
@@ -476,6 +474,15 @@ pub fn run(once: bool) {
             };
             println!("{}\t{}\t{:?}\t{}\tclaude={o}\tsubagents={subs}{}", p.id, p.sess, d.state, d.rule, if p.mate { "\tmate" } else { "" });
         }
+        return;
+    }
+    // 只跑一个：launchd 拉起的、tmux 里 init 起的 serve 撞上时，后来的那个直接退
+    let _ = std::fs::create_dir_all(crate::state_dir());
+    let lock = std::fs::File::create(crate::state_dir().join("agents.lock"));
+    if let Ok(l) = &lock
+        && l.try_lock().is_err()
+    {
+        eprintln!("statetrail-tmux agents: already running");
         return;
     }
     let code = crate::exe_mtime();

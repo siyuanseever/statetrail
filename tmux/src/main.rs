@@ -11,6 +11,7 @@
 mod agents;
 mod daemon;
 mod goto;
+mod init;
 mod open;
 mod pane;
 mod tmux;
@@ -220,6 +221,9 @@ fn main() {
         Some("pane") => pane::run(cfg, &arg(1)),
         Some("toggle") => open::toggle(&arg(1), &cfg),
         Some("daemon") => daemon::run(cfg),
+        Some("init") => init::init(),
+        Some("serve") => init::serve(cfg),
+        Some("click") => init::click(&arg(1), &arg(2)),
         Some("agents") => agents::run(arg(1) == "--once"),
         Some("goto") => goto::run(&arg(1), &arg(2)),
         Some("goto-list") => goto::list(),
@@ -253,7 +257,7 @@ fn main() {
             }
         }
         _ => {
-            eprintln!("usage: statetrail-tmux {{toggle <pane>|pane <claude-pane>|daemon|agents [--once]|goto <pane> [client]|goto-list|pickrepo <dir>|version}}");
+            eprintln!("usage: statetrail-tmux {{init|serve|click <range> <client>|toggle <pane>|pane <claude-pane>|daemon|agents [--once]|goto <pane> [client]|goto-list|pickrepo <dir>|version}}");
             std::process::exit(2);
         }
     }

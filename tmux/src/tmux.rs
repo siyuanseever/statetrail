@@ -23,7 +23,14 @@ fn bin() -> &'static str {
 /// 跑一条 tmux 命令，成功了返回它的输出。
 /// 带 -u：launchd 起的进程没有 LANG，tmux 会把输出里的制表符和非 ASCII 字都换成 _（格式按制表符切就全错了）。
 pub fn run(args: &[&str]) -> Option<String> {
-    let o = Command::new(bin()).arg("-u").args(args).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+    let mut c = Command::new(bin());
+    c.arg("-u");
+    // 在哪个 tmux 里（TMUX 环境变量的第一段是 socket）就连哪个，但不带「当前客户端」：Collie 这类只读控制客户端挂着时，
+    // tmux 会挑它当当前客户端，写选项、切窗格会被拒（client is read-only）。launchd 拉起的没有 TMUX，连默认的。
+    if let Some(sock) = std::env::var("TMUX").ok().and_then(|t| t.split(',').next().map(str::to_owned)).filter(|s| !s.is_empty()) {
+        c.args(["-S", &sock]).env_remove("TMUX");
+    }
+    let o = c.args(args).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
     o.status.success().then(|| String::from_utf8_lossy(&o.stdout).into_owned())
 }
 
@@ -102,6 +109,38 @@ pub fn status_file() -> PathBuf {
         .unwrap_or_else(|| crate::home().join(".claude/tmux-claude-status.json"))
 }
 
+/// 会话文件里的窗格号只在一个 tmux server 里有意义（每个 server 都从 %0 数起）：同时开着几个 tmux 时，别的 server 的
+/// %1 会冒充这里的 %1。所以只认 Claude 进程真在这个窗格里的：进程就是窗格的进程，或者是它的直接子进程（shell 里起的）。
+fn mine(found: Vec<(String, String, u32)>) -> HashMap<String, String> {
+    if found.is_empty() {
+        return HashMap::new();
+    }
+    let root: HashMap<String, u32> = run(&["list-panes", "-a", "-F", "#{pane_id} #{pane_pid}"])
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| {
+            let (p, pid) = l.split_once(' ')?;
+            Some((p.to_owned(), pid.trim().parse().ok()?))
+        })
+        .collect();
+    let parent: HashMap<u32, u32> = Command::new("ps")
+        .args(["-A", "-o", "pid=,ppid="])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| {
+            let mut f = l.split_whitespace();
+            Some((f.next()?.parse().ok()?, f.next()?.parse().ok()?))
+        })
+        .collect();
+    found
+        .into_iter()
+        .filter(|(pane, _, pid)| root.get(pane).is_some_and(|r| r == pid || parent.get(pid) == Some(r)))
+        .map(|(pane, sid, _)| (pane, sid))
+        .collect()
+}
+
 /// 哪个窗格是哪个会话、在不在干活。三个来源，前面的说了算，钩子那份只是退路（没装 claude-tmux-sessions 的钩子也能用）：
 /// - Claude 自己写的 <配置目录>/sessions/<进程号>.json："tmux": "session:@窗口.%窗格" 和 sessionId（进程退出时删掉，只有活着的）
 /// - agents 常驻进程写的 <状态目录>/agents.json：看屏幕认的状态，和状态栏圆点同一份
@@ -111,7 +150,7 @@ pub fn status_file() -> PathBuf {
 pub struct Status {
     mtime: Option<SystemTime>,
     data: Value,
-    own: HashMap<PathBuf, (SystemTime, Option<(String, String)>)>, // Claude 的会话文件 → (窗格, 会话 id)
+    own: HashMap<PathBuf, (SystemTime, Option<(String, String, u32)>)>, // Claude 的会话文件 → (窗格, 会话 id, Claude 进程号)
     own_sid: HashMap<String, String>,
     agents_mtime: Option<SystemTime>,
     agents: Value,
@@ -157,7 +196,8 @@ impl Status {
                 let v: Option<Value> = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok());
                 let got = v.and_then(|v| {
                     let pane = v["tmux"].as_str()?.rsplit('.').next()?.to_owned();
-                    Some((pane, v["sessionId"].as_str()?.to_owned()))
+                    let pid = v["pid"].as_u64()? as u32;
+                    Some((pane, v["sessionId"].as_str()?.to_owned(), pid))
                 });
                 self.own.insert(path, (mt, got));
                 changed = true;
@@ -166,7 +206,7 @@ impl Status {
         let before = self.own.len();
         self.own.retain(|p, _| seen.contains(p));
         if changed || self.own.len() != before {
-            self.own_sid = self.own.values().filter_map(|(_, g)| g.clone()).collect();
+            self.own_sid = mine(self.own.values().filter_map(|(_, g)| g.clone()).collect());
             return true;
         }
         false
