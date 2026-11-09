@@ -181,10 +181,28 @@ pub fn parse(out: &[u8], new: &[usize]) -> Result<Vec<(usize, String)>, String> 
         .collect())
 }
 
+/// claude 程序：PATH 里找，找不到再看几个常见的安装位置。launchd 拉起的常驻进程 PATH 里没有 ~/.local/bin
+/// （官方安装脚本装在那里），以前分章一直报「claude: No such file or directory」，一个章名都没有。
+fn claude_bin() -> PathBuf {
+    let home = crate::home();
+    std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).map(|d| d.join("claude")).collect::<Vec<_>>())
+        .unwrap_or_default()
+        .into_iter()
+        .chain([
+            home.join(".local/bin/claude"),
+            home.join(".claude/local/claude"),
+            PathBuf::from("/opt/homebrew/bin/claude"),
+            PathBuf::from("/usr/local/bin/claude"),
+        ])
+        .find(|p| p.is_file())
+        .unwrap_or_else(|| PathBuf::from("claude"))
+}
+
 /// 调一次 Haiku（阻塞，几秒到十几秒，放线程里跑）。用这个会话自己的账号；不留会话记录、不带工具、不读设置（不跑 hook）。
 pub fn ask(cfg_dir: &Path, input: &str) -> Result<Vec<u8>, String> {
     let _ = std::fs::create_dir_all(dir());
-    let mut cmd = Command::new("claude");
+    let mut cmd = Command::new(claude_bin());
     cmd.args(["-p", "--model", "haiku", "--no-session-persistence", "--restricted", "--tools", "", "--strict-mcp-config"])
         .args(["--system-prompt", SYSTEM, "--output-format", "json", "--json-schema", SCHEMA])
         .current_dir(dir()) // 不在任何项目里：不读项目的 CLAUDE.md
