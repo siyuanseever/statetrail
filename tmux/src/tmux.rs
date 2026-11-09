@@ -3,6 +3,7 @@
 //! 对应 herdr 版的 herdr.rs。
 
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::SystemTime;
@@ -91,23 +92,6 @@ pub fn claude_pid(pane: &str) -> Option<u32> {
     rows.iter().find(|&&(_, ppid, name)| ppid == root && claude(name)).map(|r| r.0)
 }
 
-/// 窗格 → 会话 id，从 Claude 自己写的 <配置目录>/sessions/<进程号>.json 读（"tmux": "session:@窗口.%窗格"）。
-/// 不靠钩子：没装 claude-tmux-sessions 的钩子也认得出。进程退出时文件就删了，所以只有活着的。
-pub fn claude_sessions() -> std::collections::HashMap<String, String> {
-    let mut out = std::collections::HashMap::new();
-    for dir in statetrail_core::claude::config_dirs() {
-        for e in std::fs::read_dir(dir.join("sessions")).into_iter().flatten().flatten() {
-            let Some(v) = std::fs::read(e.path()).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else { continue };
-            if let (Some(t), Some(sid)) = (v["tmux"].as_str(), v["sessionId"].as_str())
-                && let Some(pane) = t.rsplit('.').next()
-            {
-                out.insert(pane.to_owned(), sid.to_owned());
-            }
-        }
-    }
-    out
-}
-
 // ---- hook 写的状态文件 -------------------------------------------------------------------
 
 /// `~/.claude/tmux-claude-status.json`：{"%窗格": {"session_id": …, "status": "running" | "blocked" | "input" | …}}。
@@ -118,34 +102,93 @@ pub fn status_file() -> PathBuf {
         .unwrap_or_else(|| crate::home().join(".claude/tmux-claude-status.json"))
 }
 
-/// 状态文件按修改时间缓存：没变就不重读。
+/// 哪个窗格是哪个会话、在不在干活。三个来源，前面的说了算，钩子那份只是退路（没装 claude-tmux-sessions 的钩子也能用）：
+/// - Claude 自己写的 <配置目录>/sessions/<进程号>.json："tmux": "session:@窗口.%窗格" 和 sessionId（进程退出时删掉，只有活着的）
+/// - agents 常驻进程写的 <状态目录>/agents.json：看屏幕认的状态，和状态栏圆点同一份
+/// - 钩子写的状态文件（上面 status_file）：会话 id、状态，还有 subagent、已读这些只有它记的
+/// 都按修改时间缓存：没变就不重读。
 #[derive(Default)]
 pub struct Status {
     mtime: Option<SystemTime>,
     data: Value,
+    own: HashMap<PathBuf, (SystemTime, Option<(String, String)>)>, // Claude 的会话文件 → (窗格, 会话 id)
+    own_sid: HashMap<String, String>,
+    agents_mtime: Option<SystemTime>,
+    agents: Value,
 }
 
 impl Status {
     /// 重读（文件变了才读）；返回这次有没有变。
     pub fn reload(&mut self) -> bool {
+        let mut changed = false;
         let path = status_file();
         let m = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
-        if m == self.mtime {
-            return false;
+        if m != self.mtime {
+            self.mtime = m;
+            if let Some(v) = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()) {
+                self.data = v;
+            }
+            changed = true;
         }
-        self.mtime = m;
-        if let Some(v) = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()) {
-            self.data = v;
+        let path = crate::agents::state_file();
+        let m = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        if m != self.agents_mtime {
+            self.agents_mtime = m;
+            self.agents = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+            changed = true;
         }
-        true
+        changed | self.reload_own()
+    }
+
+    fn reload_own(&mut self) -> bool {
+        let mut seen = std::collections::HashSet::new();
+        let mut changed = false;
+        for dir in statetrail_core::claude::config_dirs() {
+            for e in std::fs::read_dir(dir.join("sessions")).into_iter().flatten().flatten() {
+                let path = e.path();
+                if path.extension().is_none_or(|x| x != "json") {
+                    continue;
+                }
+                let Ok(mt) = e.metadata().and_then(|m| m.modified()) else { continue };
+                seen.insert(path.clone());
+                if self.own.get(&path).is_some_and(|(t, _)| *t == mt) {
+                    continue;
+                }
+                let v: Option<Value> = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok());
+                let got = v.and_then(|v| {
+                    let pane = v["tmux"].as_str()?.rsplit('.').next()?.to_owned();
+                    Some((pane, v["sessionId"].as_str()?.to_owned()))
+                });
+                self.own.insert(path, (mt, got));
+                changed = true;
+            }
+        }
+        let before = self.own.len();
+        self.own.retain(|p, _| seen.contains(p));
+        if changed || self.own.len() != before {
+            self.own_sid = self.own.values().filter_map(|(_, g)| g.clone()).collect();
+            return true;
+        }
+        false
     }
 
     pub fn session(&self, pane: &str) -> Option<String> {
-        self.data[pane]["session_id"].as_str().filter(|s| !s.is_empty()).map(str::to_owned)
+        self.own_sid
+            .get(pane)
+            .cloned()
+            .or_else(|| self.data[pane]["session_id"].as_str().filter(|s| !s.is_empty()).map(str::to_owned))
     }
 
+    /// 用钩子的说法（running / blocked / done / input）：agents 常驻进程看屏幕认的优先
     pub fn state(&self, pane: &str) -> Option<String> {
-        self.data[pane]["status"].as_str().map(str::to_owned)
+        let mapped = match self.agents[pane].as_str() {
+            Some("wait") => Some("blocked"),
+            Some("run") => Some("running"),
+            Some("done") => Some("done"),
+            Some("read") => Some("input"),
+            _ => None,
+        };
+        mapped.map(str::to_owned).or_else(|| self.data[pane]["status"].as_str().map(str::to_owned))
     }
 
     /// 钩子记下的、还在跑的 subagent 有几个：SubagentStart 之后没等到 SubagentStop、3 小时内还有过动静。
@@ -175,12 +218,16 @@ impl Status {
 
     /// 窗格 → 会话 id，所有知道会话的窗格（跨会话搜索时认哪些会话开着）
     pub fn sessions(&self) -> Vec<(String, String)> {
-        self.data
-            .as_object()
-            .into_iter()
-            .flatten()
-            .filter_map(|(p, e)| Some((p.clone(), e["session_id"].as_str()?.to_owned())))
-            .collect()
+        let mut out: Vec<(String, String)> = self.own_sid.iter().map(|(p, s)| (p.clone(), s.clone())).collect();
+        out.extend(
+            self.data
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter(|(p, _)| !self.own_sid.contains_key(*p))
+                .filter_map(|(p, e)| Some((p.clone(), e["session_id"].as_str()?.to_owned()))),
+        );
+        out
     }
 }
 

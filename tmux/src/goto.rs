@@ -1,6 +1,6 @@
 //! 跳到某个 Claude（prefix+g，`statetrail-tmux goto <窗格>`，在 display-popup 里跑）：浮窗本身在 core 的 goto（和 herdr 版共用），
 //! 这里是 tmux 那一层：session 当工作区、窗口当标签页；每个 Claude 的状态读 agents 常驻进程写的 agents.json（和状态栏圆点一样），
-//! 会话 id 先看 Claude 自己的会话文件、再看钩子的状态文件；读屏 capture-pane -e，跳过去 switch-client + select-window + select-pane。
+//! 会话 id 见 tmux::Status（先看 Claude 自己的会话文件、再看钩子的状态文件）；读屏 capture-pane -e，跳过去 switch-client + select-window + select-pane。
 
 use serde_json::Value;
 use statetrail_core::goto::{Agent, Host, Seen, Space};
@@ -47,7 +47,6 @@ impl Host for Tmux {
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
-        let own = tmux::claude_sessions();
         let mut st = tmux::Status::default();
         st.reload();
         let fmt = "#{pane_id}\t#{window_id}\t#{session_id}\t#{pane_current_command}\t#{pane_current_path}\t\
@@ -72,7 +71,7 @@ impl Host for Tmux {
                     tab: win.to_string(),
                     ws: sess.to_string(),
                     status: status.into(),
-                    sid: own.get(*pane).cloned().or_else(|| st.session(pane)),
+                    sid: st.session(pane),
                     cwd: cwd.to_string(),
                     title: strip_glyph(title),
                 })
