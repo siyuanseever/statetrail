@@ -96,6 +96,8 @@ background shells are deliberately not counted as running. Happy to hear where t
 
 ## 5. herdr Discord / 讨论区（statetrail 帖子下面回一条）
 
+**已发**（2026-11-09，GitHub 讨论区 #5758 下的评论）：https://github.com/herdrdev/herdr/discussions/5758#discussioncomment-19488399
+
 **配图**：跳转浮窗
 
 ![](../../tmux/docs/goto.png)
@@ -133,5 +135,7 @@ https://github.com/siyuanseever/statetrail
 ---
 
 ## 7. 知乎（专栏文章）
+
+**已发**（2026-11-09，个人号「三日猫」，话题 tmux、claude-code，封面是状态栏截图）：https://zhuanlan.zhihu.com/p/2103176707616273166
 
 正式的工具分享，接着 10-24 那篇 claude-tmux-sessions 写：见 [zhihu.md](zhihu.md)。
