@@ -80,6 +80,9 @@ run-shell 'statetrail-tmux init'
   - 验过的：独立的 tmux server（干净配置、单独状态目录、当成没装钩子和脚本）里 init 跑通；Ubuntu 24.04 容器（tmux 3.4）里装 CI 编的
     Linux 包，两步装好，3 秒内出圆点，浮窗列表对，tmux 关了常驻进程自己退。
   - 没验过：真的另一个 macOS 用户；get.sh 真下载，要等第一个 `tmux-v*` 标签发出去、合进 main 才有地址。
+- **2026-11-09 发了 tmux-v0.1.0**：Release 8 个文件（4 个平台各一个包 + sha256），main `98dfc11..1e8ad8a`。
+  用登录过的 gh 下回来核过 sha256、能跑。没登录的 curl 当天下 Release 文件全是 504：GitHub 当天有事故
+  「Increased timeouts due to surge in anonymous users」，get.sh 加了重试（`32cb9b8`），要快进进 main 才生效。
 - 原来第 3 步要处理的三处 claude-tmux-sessions 脚本（已处理）：
   - `float-tool.sh`：Git、文件浮窗，并进 Rust。
   - `usage-refresh.py`：查实时额度，改用 core 里 herdr 版那套 Rust 查法。
