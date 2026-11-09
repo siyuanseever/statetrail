@@ -20,8 +20,9 @@ fn bin() -> &'static str {
 }
 
 /// 跑一条 tmux 命令，成功了返回它的输出。
+/// 带 -u：launchd 起的进程没有 LANG，tmux 会把输出里的制表符和非 ASCII 字都换成 _（格式按制表符切就全错了）。
 pub fn run(args: &[&str]) -> Option<String> {
-    let o = Command::new(bin()).args(args).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+    let o = Command::new(bin()).arg("-u").args(args).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
     o.status.success().then(|| String::from_utf8_lossy(&o.stdout).into_owned())
 }
 
