@@ -141,5 +141,6 @@ https://github.com/siyuanseever/statetrail
 ## 7. 知乎（专栏文章）
 
 **已发**（2026-11-09，个人号「三日猫」，话题 tmux、claude-code，封面是状态栏截图）：https://zhuanlan.zhihu.com/p/2103176707616273166
+10-24 那篇旧文章（https://zhuanlan.zhihu.com/p/2097361811792204776）开头加了一句「更新（2026-11-09）：……介绍见新文章」，两篇都留着（用户定的，不合并）。
 
 正式的工具分享，接着 10-24 那篇 claude-tmux-sessions 写：见 [zhihu.md](zhihu.md)。
