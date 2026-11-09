@@ -16,25 +16,26 @@
 
 ![](../../tmux/docs/demo.gif)
 
-**正文**：
+**正文**（第 2 版：第 1 版被版规机器人拦下，说没写怎么用 Claude 做的；这版补上，写明免费和怎么试）：
 
-I run many Claude Code sessions across tmux sessions and needed to see which ones are blocked on me. statetrail adds:
+I built statetrail because I run many Claude Code sessions across tmux sessions and needed to see which ones are blocked on me. It adds:
 
-- **A dot per Claude in the tmux status bar**, grouped by session. Red is waiting for you (permission prompt,
-  question), green finished while you were elsewhere, gold is running, grey you've seen. Click a dot to jump there.
-- **`prefix g`** opens a popup with every Claude by session: how long it's been in that state, what it was asked,
-  and a live preview.
-- **A trail** docked next to the Claude you're looking at: one row per turn, grouped into chapters. Click a turn and
-  Claude's own screen scrolls to it.
-- **Search what you said**: `/` in the trail filters this session, `Tab` searches every session on the machine,
-  grouped by session; Enter jumps there (or resumes it in a new window if it isn't open).
+- **A dot per Claude in the tmux status bar**, grouped by session. Red is waiting for you (permission prompt, question), green finished while you were elsewhere, gold is running, grey you've seen. Click a dot to jump there.
+- **`prefix g`** opens a popup with every Claude by session: how long it's been in that state, what it was asked, and a live preview.
+- **A trail** docked next to the Claude you're looking at: one row per turn, grouped into chapters. Click a turn and Claude's own screen scrolls to it.
+- **Search what you said**: `/` in the trail filters this session, `Tab` searches every session on the machine, grouped by session; Enter jumps there.
 
-State comes from reading each pane's screen plus the session files Claude Code writes, so there are no hooks and
-nothing added to `settings.json`. It's a single Rust binary; install is one curl line plus one line in tmux.conf.
+**How Claude Code built it:** the whole thing was written with Claude Code over about two weeks (all 175 commits, ~8.9k lines of Rust). I described what I wanted and used it daily; Claude Code wrote the code, ported herdr's screen-detection rules (Apache-2.0, credited), built the demo rig that records the GIF from a fake Claude in a private tmux server, and tested installs in an Ubuntu container. When a dot showed the wrong state in my own tmux, I'd tell it what I saw and it would find the cause in the pane's screen or Claude's session files.
+
+**Free and open source (MIT).** To try it:
+
+```
+curl -fsSL https://raw.githubusercontent.com/siyuanseever/statetrail/main/tmux/get.sh | sh
+```
+
+then add `run-shell '~/.local/bin/statetrail-tmux init'` at the end of your tmux.conf. No hooks, nothing added to `settings.json`. macOS and Linux, tmux 3.2+.
 
 https://github.com/siyuanseever/statetrail
-
-Feedback welcome, especially if the dot gets a state wrong for you.
 
 ---
 
