@@ -23,7 +23,7 @@ const PID_OPT: &str = "@claude_agents_pid";
 const DOTS_OPT: &str = "@claude_dots";
 const WIN_OPT: &str = "@claude_win";
 
-const FMT: &str = "P\t#{pane_id}\t#{session_name}\t#{window_id}\t#{pane_current_command}\t#{window_activity}\t\
+const FMT: &str = "P\t#{pane_id}\t#{session_name}\t#{session_id}\t#{window_id}\t#{pane_current_command}\t#{window_activity}\t\
 #{?#{m:*--agent-id*,#{pane_start_command}},1,0}\t#{pane_title}";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -37,6 +37,7 @@ enum Show {
 struct Pane {
     id: String,
     sess: String,
+    sess_id: String, // $3
     win: String,
     title: String,
     activity: String,
@@ -116,11 +117,12 @@ impl Agents {
         let mut watched = HashSet::new();
         let mut wins: Vec<(String, String)> = Vec::new();
         for line in out.lines() {
-            let f: Vec<&str> = line.splitn(8, '\t').collect();
+            let f: Vec<&str> = line.splitn(9, '\t').collect();
             match f.as_slice() {
-                ["P", id, sess, win, cmd, activity, mate, title] if is_claude(cmd) => panes.push(Pane {
+                ["P", id, sess, sid, win, cmd, activity, mate, title] if is_claude(cmd) => panes.push(Pane {
                     id: id.to_string(),
                     sess: sess.to_string(),
+                    sess_id: sid.to_string(),
                     win: win.to_string(),
                     title: title.to_string(),
                     activity: activity.to_string(),
@@ -275,24 +277,26 @@ fn colour(s: Show) -> &'static str {
     }
 }
 
-/// 状态栏那一排：`OS ●●●  news ●●●●`，当前 session 的名字亮，点一个点跳到那个 Claude（status-click.sh 的 p<n>）。
+/// 状态栏那一排：`OS ●●●  news ●●●●`，当前 session 的名字亮，点一个点跳到那个 Claude（status-click.sh 的 p<n>），
+/// 点 session 名切到那个 session（s<n>，n 是 session id 去掉 $：名字可能比 range 名能放的长）。
 /// range 名用 p<数字> 不用 %<数字>：选项内容会被当格式再展开一遍，% 会被 strftime 吃掉。
 fn render_dots(shown: &[(&Pane, Show)]) -> String {
-    let mut groups: Vec<(&str, String)> = Vec::new();
+    let mut groups: Vec<(&str, &str, String)> = Vec::new();
     for (p, s) in shown {
         if groups.last().is_none_or(|g| g.0 != p.sess) {
-            groups.push((&p.sess, String::new()));
+            groups.push((&p.sess, &p.sess_id, String::new()));
         }
         let g = groups.last_mut().unwrap();
-        g.1 += &format!("#[range=user|p{}]#[fg={}]●#[norange]", p.id.trim_start_matches('%'), colour(*s));
+        g.2 += &format!("#[range=user|p{}]#[fg={}]●#[norange]", p.id.trim_start_matches('%'), colour(*s));
     }
     let out: Vec<String> = groups
         .iter()
-        .map(|(sess, dots)| {
+        .map(|(sess, sid, dots)| {
             let name = sess.replace('#', "##");
             let cond = name.replace(',', "#,").replace('}', "#}");
+            let n = sid.trim_start_matches('$');
             // 条件分支里不能有逗号，所以亮的样式拆成两个 #[]
-            format!("#{{?#{{==:#{{session_name}},{cond}}},#[fg=#e4e4e4]#[bold],#[fg=#8a8a8a]}}{name}#[nobold] {dots}")
+            format!("#{{?#{{==:#{{session_name}},{cond}}},#[fg=#e4e4e4]#[bold],#[fg=#8a8a8a]}}#[range=user|s{n}]{name}#[norange]#[nobold] {dots}")
         })
         .collect();
     if out.is_empty() { String::new() } else { out.join("  ") + "#[default]" }
@@ -346,11 +350,12 @@ pub fn run(once: bool) {
         let panes: Vec<Pane> = out
             .lines()
             .filter_map(|l| {
-                let f: Vec<&str> = l.splitn(8, '\t').collect();
-                let ["P", id, sess, win, cmd, act, mate, title] = f.as_slice() else { return None };
+                let f: Vec<&str> = l.splitn(9, '\t').collect();
+                let ["P", id, sess, sid, win, cmd, act, mate, title] = f.as_slice() else { return None };
                 is_claude(cmd).then(|| Pane {
                     id: id.to_string(),
                     sess: sess.to_string(),
+                    sess_id: sid.to_string(),
                     win: win.to_string(),
                     title: title.to_string(),
                     activity: act.to_string(),
@@ -389,6 +394,7 @@ mod tests {
         Pane {
             id: id.into(),
             sess: sess.into(),
+            sess_id: format!("${}", sess.len()),
             win: win.into(),
             title: String::new(),
             activity: String::new(),
@@ -413,6 +419,7 @@ mod tests {
         assert!(plain.contains("OS ●●") && plain.contains("news ●"), "{plain}");
         assert!(d.contains("range=user|p7]#[fg=#ff5f5f]●"));
         assert!(!d.contains('%'));
+        assert!(d.contains("#[range=user|s2]OS#[norange]"), "{d}");
     }
 
     #[test]
