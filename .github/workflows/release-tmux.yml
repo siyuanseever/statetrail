@@ -1,0 +1,72 @@
+# tmux 版 statetrail（tmux/）：推 tmux-v* 标签就编 4 个平台、发到 GitHub Release（tmux/get.sh 按平台下对应的包）。
+# 推 rust 分支（改到 tmux/ 或 core/ 时）只编、只跑测试，不发。
+name: release-tmux
+
+on:
+  push:
+    tags: ["tmux-v*"]
+    branches: [rust]
+    paths: ["tmux/**", "core/**", ".github/workflows/release-tmux.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, target: aarch64-apple-darwin }
+          - { os: macos-14, target: x86_64-apple-darwin }
+          - { os: ubuntu-24.04, target: x86_64-unknown-linux-musl }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: tmux
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Cargo.toml version matches the tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          v="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          test "tmux-v$v" = "$GITHUB_REF_NAME" || { echo "tmux/Cargo.toml version tmux-v$v != tag $GITHUB_REF_NAME"; exit 1; }
+      - name: Install musl tools
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo test --locked
+        if: "!contains(matrix.target, 'x86_64-apple')"
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          a="statetrail-tmux-${{ matrix.target }}.tar.gz"
+          tar -czf "$a" -C "target/${{ matrix.target }}/release" statetrail-tmux
+          shasum -a 256 "$a" > "$a.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: statetrail-tmux-${{ matrix.target }}
+          path: tmux/statetrail-tmux-${{ matrix.target }}.tar.gz*
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pre=""
+          case "$GITHUB_REF_NAME" in *-rc*|*-beta*) pre="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" $pre --latest=false \
+            --title "statetrail for tmux ${GITHUB_REF_NAME#tmux-}" \
+            --notes "Install: curl -fsSL https://raw.githubusercontent.com/siyuanseever/statetrail/main/tmux/get.sh | sh"
