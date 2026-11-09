@@ -68,13 +68,13 @@ pub fn config() -> Config {
     let i = |k: &str, d: i64| t.get(k).and_then(toml::Value::as_integer).unwrap_or(d);
     Config {
         auto_open: b("auto_open", true),
-        narrow_default: s("default_mode", "wide") == "narrow",
+        narrow_default: s("default_mode", "narrow") != "wide", // 2026-11-09 起默认窄版，和 herdr 插件一样（用户：「默认宽度有点宽了，改成跟 herdr插件里一样」）
         width: t
             .get("width")
             .and_then(toml::Value::as_float)
             .map_or(0.34, |w| w.clamp(0.1, 0.9)),
         min_width: i("min_width", 120),
-        shell_height: i("shell_height", 8),
+        shell_height: i("shell_height", 0), // 2026-11-09 起默认不在轨迹上面切命令行（窄版 17 列太窄），命令行改成底部 ›_ 按钮，和 herdr 插件一样
         lang: s("lang", ""),
         icons: Some(s("icons", "auto"))
             .filter(|v| ["auto", "nerd", "unicode", "text"].contains(&v.as_str()))

@@ -85,6 +85,26 @@ fn open_shell(sb: &str, caller: &str, h: i64) {
     }
 }
 
+/// 底部 ›_ 按钮：在 Claude 下面切出一条命令行（Claude 那一格的一半高，目录一样），再点一次关掉。和 herdr 插件一样，
+/// 点外面不关：跑到一半的 ssh 不能因为点了一下 Claude 就没了。打 @trail_shell：常驻进程不把它算成队友，轨迹收掉时一起收。
+pub fn toggle_shell(caller: &str) {
+    if let Some(sh) = find_pane(caller, "@trail_shell", caller) {
+        let _ = tmux::run(&["kill-pane", "-t", &sh]);
+        let _ = tmux::run(&["select-pane", "-t", caller]);
+        return;
+    }
+    let cwd = tmux::display(caller, "#{pane_current_path}").unwrap_or_default();
+    let mut args = vec!["split-window", "-v", "-l", "50%", "-t", caller, "-P", "-F", "#{pane_id}"];
+    if !cwd.is_empty() {
+        args.extend(["-c", &cwd]);
+    }
+    if let Some(sh) = tmux::run(&args) {
+        let sh = sh.trim();
+        tmux::set_opt(sh, "@trail_shell", caller);
+        tmux::set_opt(sh, "@resurrect_skip", "1");
+    }
+}
+
 /// 队友模式：浮在窗口右边，盖住队友那一侧的一部分，领队那一条原样不动。不切命令行（浮窗再切一块更挤）。
 fn open_float(caller: &str, cmd: &str) -> Option<String> {
     let wh = tmux::display(caller, "#{window_width} #{window_height}")?;

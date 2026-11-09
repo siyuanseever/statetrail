@@ -17,19 +17,20 @@ the tmux layer.
   trail beside the Claude you are using does this, and only when Claude's window has new output.
 - **Chapters.** Turns are grouped by task; only the selected chapter is expanded. Claude Haiku decides where chapters
   start (only for the Claude you are looking at, with that session's own account); right-click to fix.
-- **Search.** The search button (or `/` when the trail has focus) filters this session; `Tab` searches everything you
+- **Search.** `/` when the trail has focus filters this session; `Tab` searches everything you
   said in every session on this machine. Open sessions are switched to; closed ones resume in a new window.
 - **Keyboard.** `↑` `↓` / `k` `j`, PageUp / PageDown, Home / End, `←` `→` between chapters and turns, `Enter` jumps,
   `Esc` gives focus back to Claude. The wheel moves the selection. Clicking the trail does not steal focus.
 - **▲ 12 / ▼ 5** above and below the list when it is longer than the pane; click to page.
-- **Narrow / wide**: `»` shrinks to 17 columns, `«` brings it back.
+- **Narrow / wide**: opens narrow (17 columns, like the herdr plugin); `«` widens it, `»` shrinks it back.
 - **Header**: model, effort, account, `ctx` `5h` `7d` bars (grey until something needs attention) and reset countdowns.
-  Buttons: bottom, search, Git (with the number of uncommitted files), files, refresh quota, close. Click the account
+  Buttons are laid out as in the herdr plugin: width, bottom and refresh quota on top; Git (with the number of
+  uncommitted files when wide), files and a shell at the bottom (the shell opens below Claude, half its height;
+  click again to close it). Click the account
   name to switch this Claude to another account in place (via claude-tmux-sessions' `switch_account.py`).
 - **Git and files open as floating panes** on the right. Outside a repository, Git first lists the repositories below
   with their branch and a `●` for uncommitted changes.
-- **Same tmux behaviour as the Python sidebar**: auto-opens in wide windows, remembers when you closed it, a shell above
-  it, makes way for agent-teams teammates, nothing left behind after tmux-resurrect.
+- **Same tmux behaviour as the Python sidebar**: auto-opens in wide windows, remembers when you closed it, makes way for agent-teams teammates, nothing left behind after tmux-resurrect.
 - **Restarts itself on upgrade**: after `install.sh`, open trails and the daemon switch to the new binary in place.
 
 ## Install

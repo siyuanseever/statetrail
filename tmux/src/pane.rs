@@ -102,6 +102,9 @@ struct Trail {
     manual_until: Option<Instant>, // 刚用滚轮 / 键盘挪过选中：这之前不跟 Claude 的屏幕（Claude 一输出就会把选中抢回去）
     up_at: Option<(usize, usize)>, // 表头里的 ▲：(第几行, 占到第几列)
     down_at: Option<usize>,        // 底部的 ▼：占到第几列
+    foot: Vec<Button>,             // 最底下那一行按钮
+    foot_row: usize,               // 按钮在底部的第几行（窄版有 ▼ 时是第 2 行）
+    foot_shift: usize,             // 宽版行首给 ▼ 留了位置，按钮往右挪了这么多
     footer_top: u16,
     last_wide: Option<i64>, // 切到窄版之前的宽度：切回宽版时回到它
     marks: Marks,           // 这个会话哪几轮开新章（core 的 chapters）
@@ -279,6 +282,7 @@ impl Trail {
                 }
             }
             "files" => open::spawn(&self.cfg.scripts.join("float-tool.sh"), &[&self.target, "files"]),
+            "shell" => open::toggle_shell(&self.target),
             "close" => open::close(&self.target), // 连同自己一起关掉；记下是你关的，常驻进程不再自动开
             "narrow" | "wide" => self.toggle_width(),
             "search" => self.open_search(),
@@ -887,34 +891,22 @@ impl Trail {
     }
 }
 
-/// 表头最上面的按钮：宽版一行（» 切到窄版、⇊ 到最底、Git + 没提交的文件数、文件、⟳ + 额度多新、✕ 关掉），
-/// 窄版放不下，分两行（« 切回宽版 ⇊ ⟳ ✕ / Git 文件）。每个按钮占 3 格，点偏一格也算。
+/// 按钮的布局和 herdr 插件一样（用户 2026-11-09：「UI按钮的布局呢」）：
+/// 最上面一行 « / » 切宽窄、⇊ 到最底、⟳ 刷新（宽版后面带额度多新）；最底下一行 Git、文件、命令行。
+/// 搜索按 /，关掉点状态栏的轨迹按钮。每个按钮占 3 格，点偏一格也算。
 fn button_rows(narrow: bool) -> Vec<Vec<Button>> {
     let b = |name: &str, act: &str, extra: usize| (header::icon(name), act.to_owned(), extra);
-    let close = (if header::text_tier() { "x".into() } else { "✕".into() }, "close".to_owned(), 0);
-    // 搜索：nf-fa-search / ⌕ / 「/」（core 的图标表里没有它，tmux 版自己配）
-    let glyph = match header::tier() {
-        0 => "\u{f002}",
-        1 => "⌕",
-        _ => "/",
-    };
-    let search: Button = (glyph.to_owned(), "search".to_owned(), 0);
     if narrow {
-        vec![
-            vec![b("wide", "wide", 0), b("bottom", "bottom", 0), b("usage", "usage", 0), close],
-            vec![search.clone(), b("git", "git", 0), b("files", "files", 0)],
-        ]
+        vec![vec![b("wide", "wide", 0), b("bottom", "bottom", 0), b("usage", "usage", 0)]]
     } else {
-        vec![vec![
-            b("narrow", "narrow", 0),
-            b("bottom", "bottom", 0),
-            search,
-            b("git", "git", 4),
-            b("files", "files", 0),
-            b("usage", "usage", 10),
-            close,
-        ]]
+        vec![vec![b("narrow", "narrow", 0), b("bottom", "bottom", 0), b("usage", "usage", 10)]]
     }
+}
+
+/// 最底下那一行：Git（宽版后面带没提交的文件数）、文件、命令行。
+fn foot_buttons(narrow: bool) -> Vec<Button> {
+    let b = |name: &str, act: &str, extra: usize| (header::icon(name), act.to_owned(), extra);
+    vec![b("git", "git", if narrow { 0 } else { 4 }), b("files", "files", 0), b("shell", "shell", 0)]
 }
 
 fn spawn_threads(tx: &Sender<Msg>, me: &str) {
@@ -1007,6 +999,9 @@ pub fn run(cfg: Config, target: &str) {
         manual_until: None,
         up_at: None,
         down_at: None,
+        foot: Vec::new(),
+        foot_row: 0,
+        foot_shift: 0,
         footer_top: u16::MAX,
         last_wide: None,
         marks: Marks::default(),
@@ -1147,11 +1142,12 @@ fn run_loop(
             } else {
                 header::wide(size.width as usize, &info).0.len()
             } + usize::from(s.search.is_some());
-            // 列表露出来的范围决定 ▲ / ▼：列表比窗格长时下面多一行「▼ 5」（窄版的 ▲ 也多占表头一行），所以最多算两遍
+            // 列表露出来的范围决定 ▲ / ▼：底部一直有一行按钮（上面一条线），列表比窗格长时 ▼ 放在按钮那一行的行首，
+            // 窄版放不下，▼ 单独占按钮上面一行；窄版的 ▲ 也多占表头一行。所以最多算两遍
             let mut foot_len = 0;
             let (mut slot, mut counts);
             loop {
-                let rows = (size.height as usize).saturating_sub(head_len + 1 + foot_len + usize::from(foot_len > 0) + usize::from(narrow && foot_len > 0));
+                let rows = (size.height as usize).saturating_sub(head_len + 1 + 2 + usize::from(narrow && foot_len > 0) * 2);
                 let bottom = ui::bottom_offset(&view, &items, room, rows);
                 if s.follow {
                     s.offset = bottom;
@@ -1284,12 +1280,19 @@ fn run_loop(
                     (tail, Some(th.grey)),
                 ]);
             }
-            // 底部只有「▼ 5」这一行（翻到底了位置照样留着，列表不跟着上下跳）；一屏放得下就没有底部
-            let footer: Vec<render::SLine> = if slot > 0 {
-                vec![render::lead(Vec::new(), &tag("▼", counts.1), slot)]
+            // 底部：按钮一行；▼ 宽版放在行首，窄版单独占上面一行（翻到底了位置照样留着，列表不跟着上下跳）
+            s.foot = foot_buttons(narrow);
+            let buttons = header::buttons_line_with(&s.foot, None, false, s.git);
+            let footer: Vec<render::SLine> = if slot == 0 {
+                vec![buttons]
+            } else if narrow {
+                vec![render::lead(Vec::new(), &tag("▼", counts.1), slot), buttons]
             } else {
-                Vec::new()
+                vec![render::lead(buttons, &tag("▼", counts.1), slot)]
             };
+            let footer: Vec<render::SLine> = footer.into_iter().map(|l| render::clip_line(l, room)).collect();
+            s.foot_shift = if slot > 0 && !narrow { slot + 1 } else { 0 };
+            s.foot_row = footer.len() - 1;
             s.down_at = (slot > 0 && counts.1 > 0).then_some(slot);
             let mut drawn = None;
             let mut menu_hits = Vec::new();
@@ -1369,8 +1372,13 @@ fn run_loop(
                 MouseEventKind::ScrollUp => s.move_sel(-1),
                 MouseEventKind::ScrollDown => s.move_sel(1),
                 MouseEventKind::Down(MouseButton::Left) if m.row >= s.footer_top => {
-                    if s.down_at.is_some_and(|slot| (m.column as usize).saturating_sub(1) <= slot + 1) {
+                    let (row, col) = ((m.row - s.footer_top) as usize, (m.column as usize).saturating_sub(1));
+                    if row == 0 && s.down_at.is_some_and(|slot| col <= slot + 1) {
                         s.page(1); // 点在行首 ▼ 那一段（偏一格也算）
+                    } else if row == s.foot_row
+                        && let Some(a) = header::button_at(&s.foot, col.saturating_sub(s.foot_shift)).map(str::to_owned)
+                    {
+                        s.act(&a, tx);
                     }
                 }
                 MouseEventKind::Down(MouseButton::Left) if m.row < s.header_len => {

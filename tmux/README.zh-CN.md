@@ -15,19 +15,20 @@ Rust 写的，替掉 [claude-tmux-sessions](https://github.com/siyuanseever/clau
   只有你正在用的那个 Claude 旁边的轨迹这样做，而且只在 Claude 的窗口有了新输出时才去读它的屏幕。
 - **分章。** 轮次按任务分章，同时只展开选中那一轮所在的章，收着的章写几轮。哪一轮开新章由 Claude Haiku 判断
   （只判断你正在看的那个 Claude，用它自己的账号）；分错了右键一轮「这里开新章」、右键章名「并回上一章」。
-- **搜索。** 点表头的搜索按钮（或焦点在轨迹上时按 `/`），打字只留下含这些字的轮次，`Enter` 跳过去。
+- **搜索。** 焦点在轨迹上时按 `/`，打字只留下含这些字的轮次，`Enter` 跳过去。
   搜索框里按 `Tab` 搜本机所有会话里你说过的话（轨迹临时放大到整个窗口）：开着的会话就切过去，没开就新开一个窗口
   `claude --resume`。
 - **键盘。** 焦点在轨迹上时：`↑` `↓`（`k` `j`）挪，PageUp / PageDown，Home / End（`g` `G`），`←` `→`（`h` `l`）在章和轮之间，
   `Enter` 跳，`Esc` 把焦点还给 Claude。滚轮挪选中，不跳。点轨迹不抢焦点（照旧打 `@nofocus`）。
 - **上下还有几轮。** 列表比窗格长时，上面写「▲ 12」、下面写「▼ 5」，点一下翻一屏。
-- **窄版 / 宽版。** 表头第一个按钮 `»` 收成 17 列的窄版，`«` 回到宽版。
+- **窄版 / 宽版。** 默认开窄版（17 列，和 herdr 插件一样）；表头第一个按钮 `«` 放宽，`»` 收回窄版。
 - **表头。** 模型、effort、账号，`ctx` `5h` `7d` 三条柱子（平时灰，超出匀速线才上色）和重置倒计时；点柱子马上查一次额度。
-  按钮：到最底、搜索、Git（后面是没提交的文件数）、文件、刷新额度（后面写读数多新）、关闭。
+  按钮布局和 herdr 插件一样：最上面一行 宽窄、到最底、刷新额度（宽版后面写读数多新）；
+  最底下一行 Git（宽版后面是没提交的文件数）、文件、命令行（在 Claude 下面切一半高的命令行，再点关掉，点外面不关）。
   点账号名选另一个账号，就地换（交给 claude-tmux-sessions 的 `switch_account.py`，它有安全闸）。
 - **Git、文件用浮窗**，浮在右边、点外面就关（`float-tool.sh`）。目录不在仓库里时，Git 先列出下面两层的仓库和分支，
   有改动的标 `●`，点一个再开 lazygit。
-- **和 Python 侧栏一样的 tmux 行为**：窗口够宽（≥120 列）自动开，点 ✕ 关掉的那个不再自动开；上面切一条 8 行的命令行；
+- **和 Python 侧栏一样的 tmux 行为**：窗口够宽（≥120 列）自动开，从状态栏按钮关掉的那个不再自动开；
   窗口里有 agent teams 的队友时平铺的轨迹让开，从状态栏按钮打开时浮在右边；tmux-resurrect 恢复后不留空壳（`@resurrect_skip`）。
 - **换了新版本自己重启。** `install.sh` 换上新程序后，开着的轨迹和常驻进程几秒内原地换成新的，位置不变。
 
@@ -58,10 +59,10 @@ exec /path/to/statetrail/tmux/bin/statetrail-tmux toggle "$caller"
 
 ```toml
 auto_open = true          # 窗口够宽时自动开（tmux 选项 @trail_auto 0 也能关）
-default_mode = "wide"     # 开出来多宽："wide" 或 "narrow"（17 列）
+default_mode = "narrow"   # 开出来多宽："narrow"（17 列，默认，和 herdr 插件一样）或 "wide"
 width = 0.34              # 宽版占 Claude 那一格的比例
 min_width = 120           # Claude 那一格至少这么宽才自动开
-shell_height = 8          # 上面那条命令行的行数，0 不开（tmux 选项 @trail_shell_height 优先）
+shell_height = 0          # 开轨迹时在它上面切一条命令行，几行；默认 0 不切，用底部的命令行按钮（tmux 选项 @trail_shell_height 优先）
 chapters = "auto"         # "auto"（Haiku 分章）/ "manual"（只按你右键标的）/ "off"
 live_usage = true         # 额度旧了（30 分钟）经 usage-refresh.py 去查；false 只读现有读数
 icons = "auto"            # "auto" / "nerd" / "unicode" / "text"
@@ -113,4 +114,4 @@ Python 版是同一天这台机器上正在跑的那套（当时开着 3 个侧�
 - 跳转靠 Claude Code 全屏界面的滚动快捷键；`/compact` 之前、续接会话里较早的部分，主界面已经没有了，会标出来。
 - 最后一两轮下面内容不够一屏时，主界面没法把它推到顶部。
 - 按文件顺序切轮：用过 `/rewind` 的会话，被放弃的分支也会列出来。
-- 窄版最窄 17 列；表头按钮分两行。
+- 窄版最窄 17 列。
