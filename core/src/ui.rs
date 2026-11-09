@@ -673,6 +673,27 @@ mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
 
+    #[test]
+    fn search_bar_hints() {
+        let line = |q, every, hits, narrow, room| crate::render::plain(&search_bar(q, every, None, hits, narrow, room));
+        let (esc, enter) = (t("Esc 关掉"), t("Enter 跳转"));
+        // 宽版没打字：占位字 + 能按的键，正好铺满
+        let l = line("", false, 0, false, 70);
+        assert!(l.contains(&t("打字搜这个会话")) && l.ends_with(&format!("{} · {esc}", t("Tab 搜全部会话"))), "{l}");
+        assert_eq!(l.width(), 70);
+        // 打了字、有命中
+        let l = line("tmux", false, 3, false, 70);
+        assert!(l.ends_with(&format!("{} · {enter} · {esc}", t("{n} 处").replace("{n}", "3"))), "{l}");
+        assert!(!l.contains(&t("打字搜这个会话")));
+        // 没命中就不提 Enter
+        assert!(line("zz", false, 0, false, 70).ends_with(&format!("{} · {esc}", t("没有"))));
+        // 窄版放不下：不加按键提示，不出占位字，也不超宽
+        let l = line("", false, 0, true, 17);
+        assert!(!l.contains("Esc") && !l.contains(&t("打字搜这个会话")), "{l}");
+        let l = line("tmux", false, 3, true, 17);
+        assert!(l.ends_with(" 3") && l.width() <= 17, "{l}");
+    }
+
     fn stop(id: &str, prompt: &str, reply: &str) -> Stop {
         Stop {
             kind: "human",
@@ -870,4 +891,58 @@ mod tests {
         let n = screen(true, 17, &[false, true]);
         assert!(n[1].starts_with("  ▸ 甲任务") && n[1].ends_with(" 2") && n[1].width() == 17, "{:?}", n[1]);
     }
+}
+
+/// 搜索框那一行（表头最后一行）：「/ 字▏        3 处 · Enter 跳转 · Esc 关掉」。
+/// 还没打字时，光标后面用灰字写「打字搜……」；右边按当前状态写能按的键。放不下就先丢按键提示，再丢占位字，
+/// 窄版只写数字。`hits` 是命中几处（跨会话时是结果条数）。
+pub fn search_bar(q: &str, everywhere: bool, indexing: Option<(usize, usize)>, hits: usize, narrow: bool, room: usize) -> SLine {
+    let th = colors();
+    let empty = q.trim().is_empty();
+    let (tail, short) = if let (true, Some((i, all))) = (everywhere, indexing) {
+        let s = t("建索引 {i}/{n}").replace("{i}", &i.to_string()).replace("{n}", &all.to_string());
+        (s.clone(), s)
+    } else if empty {
+        let s = t(if everywhere { "全部会话 · Tab 回到这个会话" } else { "Tab 搜全部会话" });
+        (format!("{s} · {}", t("Esc 关掉")), s)
+    } else {
+        let count = if everywhere {
+            t("全部会话 · {n} 处").replace("{n}", &hits.to_string())
+        } else if hits == 0 {
+            t("没有")
+        } else if narrow {
+            hits.to_string()
+        } else {
+            t("{n} 处").replace("{n}", &hits.to_string())
+        };
+        let keys = if hits > 0 { format!(" · {} · {}", t("Enter 跳转"), t("Esc 关掉")) } else { format!(" · {}", t("Esc 关掉")) };
+        (format!("{count}{keys}"), count)
+    };
+    // 「/ 」2 列 + 光标 1 列 + 至少 1 列空
+    let fits = |s: &str, min_q: usize| 2 + min_q + 1 + 1 + s.width() <= room;
+    let tail = if !narrow && fits(&tail, if empty { 0 } else { 4 }) { tail } else { short };
+    let room_q = room.saturating_sub(2 + 1 + tail.width() + 1);
+    // 字太长时只露最后打的那段
+    let mut w = 0;
+    let mut shown: Vec<char> = q
+        .chars()
+        .rev()
+        .take_while(|c| {
+            w += c.width().unwrap_or(0);
+            w <= room_q
+        })
+        .collect();
+    shown.reverse();
+    let shown: String = shown.into_iter().collect();
+    let hint = t(if everywhere { "打字搜所有会话" } else { "打字搜这个会话" });
+    let hint = if empty && hint.width() <= room_q { hint } else { String::new() };
+    let pad = room.saturating_sub(2 + shown.width() + 1 + hint.width() + tail.width());
+    vec![
+        ("/ ".to_owned(), Some(th.accent)),
+        (shown, None),
+        ("▏".to_owned(), Some(th.accent)),
+        (hint, Some(th.grey)),
+        (" ".repeat(pad), None),
+        (tail, Some(th.grey)),
+    ]
 }

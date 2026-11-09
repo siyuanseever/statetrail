@@ -1246,9 +1246,8 @@ fn run_loop(
                     }
                 })
                 .collect();
-            // 搜索框：表头最后一行，「/ 字▏  3 处」；窄版只写数字
+            // 搜索框：表头最后一行
             if let Some(q) = &s.search {
-                let th = crate::theme::colors();
                 let n = if s.everywhere {
                     found.len()
                 } else if query.is_empty() {
@@ -1256,42 +1255,7 @@ fn run_loop(
                 } else {
                     (0..stops.len()).filter(|&i| view.hit(i)).count()
                 };
-                let tail = if let (true, Some((i, all))) = (s.everywhere, s.indexing) {
-                    t("建索引 {i}/{n}").replace("{i}", &i.to_string()).replace("{n}", &all.to_string())
-                } else if query.is_empty() {
-                    t(if s.everywhere { "全部会话 · Tab 回到这个会话" } else { "Tab 搜全部会话" })
-                } else if s.everywhere {
-                    t("全部会话 · {n} 处").replace("{n}", &n.to_string())
-                } else if n == 0 {
-                    t("没有")
-                } else if narrow {
-                    n.to_string()
-                } else {
-                    t("{n} 处").replace("{n}", &n.to_string())
-                };
-                let room_q = room.saturating_sub(2 + 1 + UnicodeWidthStr::width(tail.as_str()) + 1);
-                let shown: String = {
-                    // 字太长时只露最后打的那段
-                    let mut w = 0;
-                    let mut v: Vec<char> = q
-                        .chars()
-                        .rev()
-                        .take_while(|c| {
-                            w += unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
-                            w <= room_q
-                        })
-                        .collect();
-                    v.reverse();
-                    v.into_iter().collect()
-                };
-                let pad = room.saturating_sub(2 + UnicodeWidthStr::width(shown.as_str()) + 1 + UnicodeWidthStr::width(tail.as_str()));
-                head.push(vec![
-                    ("/ ".to_owned(), Some(th.accent)),
-                    (shown, None),
-                    ("▏".to_owned(), Some(th.accent)),
-                    (" ".repeat(pad), None),
-                    (tail, Some(th.grey)),
-                ]);
+                head.push(ui::search_bar(q, s.everywhere, s.indexing, n, narrow, room));
             }
             // 底部：按钮一行；▼ 宽版放在行首，窄版单独占上面一行（翻到底了位置照样留着，列表不跟着上下跳）
             s.foot = foot_buttons(narrow);
