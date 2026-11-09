@@ -1,6 +1,6 @@
 # statetrail for tmux：推广稿（草稿，发之前逐条给你看原文、你说「发」才发）
 
-每条都用同一段动图打头（`tmux/docs/demo.gif`，用户 2026-11-09 定的），嵌在下面，看到的就是发出去的样子。
+每条下面嵌着发的时候配的图（就是仓库里的 `tmux/docs/` 那几张），看到的就是发出去的样子。
 链接一律用 https://github.com/siyuanseever/statetrail 。
 
 ---
@@ -38,9 +38,9 @@ Feedback welcome, especially if the dot gets a state wrong for you.
 
 **标题**：Status bar dots for every Claude Code session (click to jump), plus a per-session turn sidebar
 
-**配图**：动图
+**配图**：状态栏圆点 + 轨迹
 
-![](../../tmux/docs/demo.gif)
+![](../../tmux/docs/statusbar-trail.png)
 
 **正文**：
 
@@ -91,9 +91,9 @@ background shells are deliberately not counted as running. Happy to hear where t
 
 ## 5. herdr Discord / 讨论区（statetrail 帖子下面回一条）
 
-**配图**：动图
+**配图**：跳转浮窗
 
-![](../../tmux/docs/demo.gif)
+![](../../tmux/docs/goto.png)
 
 statetrail now has a tmux version too: the same trail and goto popup, plus a dot per Claude in the tmux status bar.
 State detection reuses herdr's Claude rules (credited, Apache-2.0). https://github.com/siyuanseever/statetrail
