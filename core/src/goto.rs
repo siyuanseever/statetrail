@@ -685,6 +685,13 @@ impl Popup<'_> {
     }
 
     fn move_sel(&mut self, d: isize) {
+        if self.ws_mode {
+            // 选中的是工作区：j 进到它的第一个 Claude，k 到它前面那个 Claude
+            self.set_level(false);
+            if d > 0 {
+                return self.move_sel(d - 1);
+            }
+        }
         let stops = self.stops();
         if stops.is_empty() {
             return;
@@ -694,31 +701,30 @@ impl Popup<'_> {
         self.select(stops[j]);
     }
 
-    /// h / l：选中挪到上 / 下一个工作区（tmux 的 session）的第一个 Claude；它们全收起来了就展开。
-    /// 没有「工作区那一层」：h j k l 随便按都是在 Claude 之间挪（用户 2026-11-09：「hl session 选择， jk window 选择……
-    /// 四个按键可以随意切换」）。
+    /// h / l：选中挪到上 / 下一个工作区（tmux 的 session）本身：顶上那一排它亮起来，右边是它所有 Claude 的卡片，
+    /// Enter 切到这个 session（用户 2026-11-10：「选择要放到 session 上呀，而不是第一个 windows 上」）。
+    /// 在工作区上按 j 进到它的第一个 Claude，按 k 回到上一个 Claude；在 Claude 上按 h l 照样换工作区。
+    /// 四个键随便按（用户 2026-11-09：「hl session 选择，jk window 选择……四个按键可以随意切换」）。
     fn jump_ws(&mut self, d: isize) {
         let n = self.list.groups.len() as isize;
-        let cur = self
-            .fix_sel()
-            .and_then(|r| match r {
+        if n == 0 {
+            return;
+        }
+        let cur = if self.ws_mode {
+            self.list.groups.iter().position(|g| Some(&g.ws) == self.sel_ws.as_ref()).map(|i| i as isize)
+        } else {
+            self.fix_sel().and_then(|r| match r {
                 Row::Agent(g, _) => Some(g as isize),
                 _ => None,
             })
-            .unwrap_or(if d > 0 { -1 } else { n });
-        let mut gi = cur + d;
-        while (0..n).contains(&gi) {
-            let g = gi as usize;
-            let first_in = |l: &List| l.rows().into_iter().find(|r| matches!(r, Row::Agent(x, _) if *x == g));
-            if first_in(&self.list).is_none() && self.list.query.is_none() {
-                self.list.show_all = true; // 这个工作区的全收起来了：展开
-            }
-            if let Some(r) = first_in(&self.list) {
-                self.select(r);
-                return;
-            }
-            gi += d; // 搜索时这个工作区一个都没命中：再往前 / 往后找
-        }
+        };
+        let gi = match cur {
+            Some(c) => (c + d).clamp(0, n - 1),
+            None if d > 0 => 0,
+            None => n - 1,
+        };
+        self.sel_ws = Some(self.list.groups[gi as usize].ws.clone());
+        self.ws_mode = true;
     }
 
     fn set_level(&mut self, ws: bool) {
