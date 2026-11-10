@@ -915,7 +915,9 @@ fn button_rows(narrow: bool) -> Vec<Vec<Button>> {
 /// 最底下那一行：Git（宽版后面带没提交的文件数）、文件。
 fn foot_buttons(narrow: bool) -> Vec<Button> {
     let b = |name: &str, act: &str, extra: usize| (header::icon(name), act.to_owned(), extra);
-    vec![b("git", "git", if narrow { 0 } else { 4 }), b("files", "files", 0)]
+    // 最后一个是「/ 搜索」：告诉你按 / 能搜，点它也一样
+    let search = (if narrow { "/".to_owned() } else { t("/ 搜索") }, "search".to_owned(), 0);
+    vec![b("git", "git", if narrow { 0 } else { 4 }), b("files", "files", 0), search]
 }
 
 fn spawn_threads(tx: &Sender<Msg>, me: &str) {
