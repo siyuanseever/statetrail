@@ -330,9 +330,8 @@ impl Trail {
             if let Some(a) = header::button_at(row, col).map(str::to_owned) {
                 self.act(&a, tx);
             }
-        } else if narrow || ln != self.head_ln {
-            self.kick_usage(true, tx);
         }
+        // 点表头别处不再强制查额度（点进轨迹常落在这里，误触会多发请求）：要刷新点 ⟳
     }
 
     /// 选中往上 / 往下挪几格（滚轮一格一格，↑↓ 也是），列表跟着滚到它。只挪选中，不跳：按 Enter 才让 Claude 跳过去
@@ -913,7 +912,7 @@ fn button_rows(narrow: bool) -> Vec<Vec<Button>> {
     if narrow {
         vec![vec![b("wide", "wide", 0), b("bottom", "bottom", 0), b("usage", "usage", 0)]]
     } else {
-        vec![vec![b("narrow", "narrow", 0), b("bottom", "bottom", 0), b("usage", "usage", 10)]]
+        vec![vec![b("narrow", "narrow", 0), b("bottom", "bottom", 0), b("usage", "usage", 18)]]
     }
 }
 

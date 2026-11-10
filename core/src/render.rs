@@ -194,18 +194,30 @@ pub fn usage_state(u: Option<&Usage>) -> Seg {
     if u.attempted_at_ms > u.fetched_at_ms && u.attempted_at_ms > u.error_at_ms {
         return seg(t("查询中…"), c.warn);
     }
-    if u.error_at_ms > u.fetched_at_ms {
+    if u.error_at_ms > u.fetched_at_ms && !u.limited {
         return seg(t("查询失败"), c.alert);
     }
     let age = (crate::claude::now_ms() - u.fetched_at_ms) / 1000;
+    if u.limited {
+        // 被限流不是坏了：照常写上次查到是多久前，后面灰字注一句
+        let (s, _) = usage_age(age);
+        return seg(format!("{s} · {}", t("限流")), c.dim);
+    }
+    let (s, col) = usage_age(age);
+    seg(s, col)
+}
+
+/// 上次查到是多久前，和该用的颜色
+fn usage_age(age: i64) -> (String, ratatui::style::Color) {
+    let c = colors();
     if age < 90 {
-        seg(t("刚刚更新"), c.used)
+        (t("刚刚更新"), c.used)
     } else if age < 3600 {
-        seg(t("{n} 分钟前").replace("{n}", &(age / 60).to_string()), c.dim)
+        (t("{n} 分钟前").replace("{n}", &(age / 60).to_string()), c.dim)
     } else if age < 2 * 86400 {
-        seg(t("{n} 小时前").replace("{n}", &(age / 3600).to_string()), c.dim)
+        (t("{n} 小时前").replace("{n}", &(age / 3600).to_string()), c.dim)
     } else {
-        seg(t("{n} 天前").replace("{n}", &(age / 86400).min(99).to_string()), c.warn) // 旧到这个程度要看得出来
+        (t("{n} 天前").replace("{n}", &(age / 86400).min(99).to_string()), c.warn) // 旧到这个程度要看得出来
     }
 }
 
@@ -287,6 +299,20 @@ pub fn ctx_pct(ctx: &str, compact_at: u64) -> Option<(u64, Color)> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rate_limited_is_not_failed() {
+        use crate::claude::{Usage, now_ms};
+        use crate::i18n::t;
+        let now = now_ms();
+        let mut u = Usage { fetched_at_ms: now - 49 * 60_000, attempted_at_ms: now - 60_000, error_at_ms: now - 60_000, ..Default::default() };
+        assert_eq!(super::usage_state(Some(&u)).0, t("查询失败"));
+        u.limited = true;
+        let (s, c) = super::usage_state(Some(&u));
+        assert_eq!(s, format!("{} · {}", t("{n} 分钟前").replace("{n}", "49"), t("限流")));
+        assert_eq!(c, Some(super::colors().dim));
+        assert!(unicode_width::UnicodeWidthStr::width(s.as_str()) <= 17, "放得进 ⟳ 后面那 18 格（前面还有一个空格）");
+    }
+
     #[test]
     fn ctx_parse() {
         assert_eq!(super::parse_ctx("22% (229k)"), Some((22, 229)));

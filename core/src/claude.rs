@@ -315,6 +315,7 @@ pub struct Usage {
     pub fetched_at_ms: i64,
     pub attempted_at_ms: i64,
     pub error_at_ms: i64,
+    pub limited: bool, // 上次查被限流（HTTP 429），等的时间还没过：这段时间谁都不再查，点 ⟳ 也不查
     pub five_hour: Window,
     pub seven_day: Window,
 }
@@ -433,6 +434,7 @@ fn live_usage(cfg_dir: &Path, live: bool) -> Option<Usage> {
         fetched_at_ms: v["fetched_at_ms"].as_i64().unwrap_or(0),
         attempted_at_ms: v["attempted_at_ms"].as_i64().unwrap_or(0),
         error_at_ms: v["error_at_ms"].as_i64().unwrap_or(0),
+        limited: now_ms() < v["limited_until_ms"].as_i64().unwrap_or(0),
         five_hour: window_of(&v["five_hour"]),
         seven_day: window_of(&v["seven_day"]),
     })
@@ -521,7 +523,7 @@ fn fetch(cfg_dir: &Path) -> Result<(Window, Window), String> {
         return Err(if code == "000" {
             t("查询失败（{err}）").replace("{err}", "network")
         } else {
-            t("查询失败 HTTP {code}").replace("{code}", code)
+            if code == "429" { t("限流") } else { t("查询失败 HTTP {code}").replace("{code}", code) }
         });
     }
     let d: Value = serde_json::from_str(body).map_err(|_| t("查询失败（{err}）").replace("{err}", "JSON"))?;
@@ -577,6 +579,9 @@ pub fn refresh_usage(cfg_dir: &Path, force: bool) {
     if force && now - live["attempted_at_ms"].as_i64().unwrap_or(0) < FORCE_GAP_MS {
         return;
     }
+    if now < live["limited_until_ms"].as_i64().unwrap_or(0) {
+        return; // 被限流了：等够了再查，点 ⟳ 也不查（再查只会把限流拖长）
+    }
     live["attempted_at_ms"] = json!(now);
     save(&path, &live); // 先记下「在查」：表头显示「查询中…」
     let r = fetch(cfg_dir);
@@ -588,9 +593,13 @@ pub fn refresh_usage(cfg_dir: &Path, force: bool) {
             live["fetched_at_ms"] = json!(now_ms());
             if let Some(m) = live.as_object_mut() {
                 m.remove("error");
+                m.remove("limited_until_ms");
             }
         }
         Err(e) => {
+            if e == t("限流") {
+                live["limited_until_ms"] = json!(now_ms() + interval_ms());
+            }
             live["error"] = json!(e);
             live["error_at_ms"] = json!(now_ms());
         }

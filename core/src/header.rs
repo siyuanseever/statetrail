@@ -120,7 +120,7 @@ pub fn wide_buttons() -> Vec<Button> {
     vec![
         (icon("narrow"), "narrow".into(), 0),
         (icon("bottom"), "bottom".into(), 0),
-        (icon("usage"), "usage".into(), 10),
+        (icon("usage"), "usage".into(), 18),
     ]
 }
 

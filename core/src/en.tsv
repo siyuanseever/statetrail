@@ -31,6 +31,7 @@ fzf 要 {need} 以上，现在是 {have}	fzf {need}+ required, found {have}
 查询中…	checking…
 查询失败	failed
 查询失败 HTTP {code}	Request failed: HTTP {code}
+限流	limited
 查询失败（{err}）	Request failed ({err})
 没找到 fzf	fzf not found
 点开展开	click to expand

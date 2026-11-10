@@ -370,9 +370,8 @@ impl Trail {
             .find(|(i, a, b)| *i + 1 == ln && (*a..*b).contains(&col.saturating_sub(1)))
         {
             self.open_menu((start + 2) as u16, (i + 1) as u16);
-        } else if narrow || ln != self.head_ln {
-            self.kick_usage(true, tx);
         }
+        // 点表头别处不再强制查额度（点进轨迹常落在这里，误触会多发请求）：要刷新点 ⟳
     }
 
     /// 点 ▲ / ▼：翻一屏的轮数，少翻一项留一轮重叠（边上那一轮常常只露出半截）。
