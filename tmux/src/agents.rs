@@ -68,8 +68,17 @@ struct Agents {
 /// 后台跑的（claude agents 里那些）没有窗格，按 jobId 记：`claude attach <jobId>` 的窗格看它的。
 #[derive(Default)]
 struct Own {
-    files: HashMap<std::path::PathBuf, (SystemTime, Option<(String, String)>)>,
+    files: HashMap<std::path::PathBuf, (SystemTime, Option<OwnFile>)>,
     attach: HashMap<String, Option<String>>, // shell 进程号 → 它下面 claude attach 的 jobId（"*" = claude agents 面板）
+}
+
+/// 一个会话文件里有用的几样：窗格（或 "job:<jobId>"）、status、sessionId、status 是什么时候写的
+#[derive(Clone)]
+struct OwnFile {
+    key: String,
+    status: String,
+    sid: String,
+    at: i64,
 }
 
 /// 一轮里 Claude 自己报的状态
@@ -96,6 +105,31 @@ impl OwnNow {
     }
 }
 
+/// 同一个会话可能有两份文件：窗格里的旧进程停在 busy 不再写了，同一个会话已经挪到后台进程在跑
+/// （2026-11-10 zumi 窗口 8：「你已经停止了也还是running呀」）。窗格按这个会话最新的那份算。
+fn own_now<'a>(files: impl Iterator<Item = &'a OwnFile>) -> OwnNow {
+    let files: Vec<&OwnFile> = files.collect();
+    let mut newest: HashMap<&str, &OwnFile> = HashMap::new();
+    for f in files.iter().filter(|f| !f.sid.is_empty()) {
+        if newest.get(f.sid.as_str()).is_none_or(|n| f.at > n.at) {
+            newest.insert(&f.sid, f);
+        }
+    }
+    let mut now = OwnNow::default();
+    for f in &files {
+        match f.key.strip_prefix("job:") {
+            Some(j) => {
+                now.job.insert(j.to_owned(), f.status.clone());
+            }
+            None => {
+                let st = newest.get(f.sid.as_str()).map_or(&f.status, |n| &n.status);
+                now.pane.insert(f.key.clone(), st.clone());
+            }
+        }
+    }
+    now
+}
+
 impl Own {
     fn reload(&mut self) -> OwnNow {
         let mut seen = HashSet::new();
@@ -117,20 +151,18 @@ impl Own {
                         Some(t) => t.rsplit('.').next()?.to_owned(),
                         None => format!("job:{}", v["jobId"].as_str()?),
                     };
-                    Some((key, v["status"].as_str()?.to_owned()))
+                    Some(OwnFile {
+                        key,
+                        status: v["status"].as_str()?.to_owned(),
+                        sid: v["sessionId"].as_str().unwrap_or("").to_owned(),
+                        at: v["statusUpdatedAt"].as_i64().or(v["updatedAt"].as_i64()).unwrap_or(0),
+                    })
                 });
                 self.files.insert(path, (mt, got));
             }
         }
         self.files.retain(|p, _| seen.contains(p));
-        let mut now = OwnNow::default();
-        for (k, st) in self.files.values().filter_map(|(_, g)| g.clone()) {
-            match k.strip_prefix("job:") {
-                Some(j) => now.job.insert(j.to_owned(), st),
-                None => now.pane.insert(k, st),
-            };
-        }
-        now
+        own_now(self.files.values().filter_map(|(_, g)| g.as_ref()))
     }
 
     /// 没有自己会话文件的 Claude 窗格：看 shell 下面跑的是不是 claude attach / claude agents。
@@ -516,6 +548,20 @@ pub fn run(once: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pane_follows_newer_file_of_same_session() {
+        let f = |key: &str, status: &str, sid: &str, at: i64| OwnFile { key: key.into(), status: status.into(), sid: sid.into(), at };
+        // 窗格里的旧进程停在 busy，同一个会话后来挪到后台、现在 idle
+        let files = [f("%18", "busy", "d044", 100), f("job:d044", "idle", "d044", 200), f("%3", "busy", "other", 50)];
+        let now = own_now(files.iter());
+        assert_eq!(now.pane["%18"], "idle");
+        assert_eq!(now.job["d044"], "idle");
+        assert_eq!(now.pane["%3"], "busy");
+        // 窗格那份更新：还用窗格自己的
+        let files = [f("%18", "busy", "d044", 300), f("job:d044", "idle", "d044", 200)];
+        assert_eq!(own_now(files.iter()).pane["%18"], "busy");
+    }
 
     fn pane(id: &str, sess: &str, win: &str) -> Pane {
         Pane {
