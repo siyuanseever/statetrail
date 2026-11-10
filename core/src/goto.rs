@@ -331,12 +331,6 @@ impl List {
         out
     }
 
-    /// 顶上那一排里这个工作区后面跟的图标：最要紧的那个状态（等你、做完没看、在跑），都安静就不画。
-    fn urgent(&self, gi: usize) -> Option<State> {
-        let g = &self.groups[gi];
-        [State::Wait, State::Done, State::Run].into_iter().find(|s| g.agents.iter().any(|a| a.state == *s))
-    }
-
     fn agent(&self, r: Row) -> Option<&Agent> {
         match r {
             Row::Agent(g, i) => self.groups.get(g)?.agents.get(i),
@@ -619,7 +613,7 @@ enum Chip {
 enum Hit {
     Row(Row),
     Chip(Chip),
-    Space(usize),
+    Ws(usize), // session 分隔线上除「⋯ 收起」以外的地方：点了切到那个 session
 }
 
 struct Popup<'h> {
@@ -821,8 +815,8 @@ impl Popup<'_> {
         }
 
         let cur = self.fix_sel();
-        self.draw_spaces(f, 1, lw, cur);
-        let mut top = 2u16;
+        // 顶上那一排 session 去掉了（用户 2026-11-10：「顶部的横排 session 可以去掉了吧」）：选中 session 时亮的是列表里它那一行
+        let mut top = 1u16;
         if let Some(q) = &self.list.query {
             let line = Line::from(vec![
                 Span::styled("  / ", Style::default().fg(c.accent)),
@@ -834,7 +828,7 @@ impl Popup<'_> {
             top += 1;
         }
 
-        // 列表：只有 Claude，工作区之间一条分隔线
+        // 列表：Claude 一个一行，工作区之间一条分隔线（写着工作区的名字；h / l 选中的就是这一行）
         let rows = self.list.rows();
         let room = area.height.saturating_sub(top) as usize;
         if let Some(i) = cur.and_then(|r| rows.iter().position(|&x| x == r)) {
@@ -866,11 +860,16 @@ impl Popup<'_> {
         for (k, &r) in rows.iter().skip(self.offset).take(room).enumerate() {
             let y = top + k as u16;
             let mut line = render_row(&self.list, r, lw.saturating_sub(3) as usize);
-            let on = matches!(r, Row::Agent(..)) && self.is_sel(r);
+            let on = self.is_sel(r);
             line.spans
                 .insert(0, Span::styled(if on { "▌ " } else { "  " }, Style::default().fg(c.accent)));
             if on {
                 line = line.style(bg);
+            }
+            if let Row::Header(gi) = r {
+                // 分隔线的 span：▌、──、名字、─…、[收起说明、──]；收起说明那段留给「点了展开」
+                let note = if line.spans.len() > 4 { line.spans[4].content.width() as u16 + 2 } else { 0 };
+                self.hits.push((y, 0, lw.saturating_sub(1 + note), Hit::Ws(gi)));
             }
             f.render_widget(Paragraph::new(line), Rect::new(0, y, lw.saturating_sub(1), 1));
             self.hits.push((y, 0, lw, Hit::Row(r)));
@@ -883,67 +882,6 @@ impl Popup<'_> {
             let sep: Vec<Line> = (0..ph).map(|_| Line::from(Span::styled("│", Style::default().fg(c.dim)))).collect();
             f.render_widget(Paragraph::new(sep), Rect::new(lw, 0, 1, ph));
             self.draw_preview(f, Rect::new(px + 1, 0, pw.saturating_sub(1), ph), cur);
-        }
-    }
-
-    /// 顶上一排工作区：「 1 projects ▶  2 OS  3 zumi ✔ 」。选中的 Claude 在哪个工作区就把哪个点亮；
-    /// 工作区那一层时选中的垫底色。放不下就往后挪，让选中的露出来。
-    fn draw_spaces(&mut self, f: &mut ratatui::Frame, y: u16, lw: u16, cur: Option<Row>) {
-        let c = colors();
-        let grey = Style::default().fg(c.grey);
-        let here = match cur {
-            Some(Row::Header(gi)) => Some(gi),
-            Some(r) => self.list.agent(r).and_then(|a| self.list.groups.iter().position(|g| g.ws == a.ws)),
-            None => None,
-        };
-        let items: Vec<(usize, Vec<Span<'static>>)> = (0..self.list.groups.len())
-            .map(|gi| {
-                let g = &self.list.groups[gi];
-                let lit = here == Some(gi);
-                let label_st = if lit {
-                    Style::default().fg(c.accent).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                };
-                let mut spans = vec![
-                    Span::raw(" "),
-                    Span::styled(format!("{} ", g.num), if lit { label_st } else { grey }),
-                    Span::styled(clip(&g.label, 16, true), label_st),
-                ];
-                if let Some(s) = self.list.urgent(gi) {
-                    let (b, st) = badge(s);
-                    spans.push(Span::styled(format!(" {}", b.split(' ').next().unwrap_or("")), st));
-                }
-                spans.push(Span::raw(" "));
-                (gi, spans)
-            })
-            .collect();
-        let w = |s: &[Span]| s.iter().map(|x| x.content.width()).sum::<usize>() as u16;
-        let avail = lw.saturating_sub(2);
-        let mut start = 0;
-        if let Some(h) = here {
-            while start < h && items[start..=h].iter().map(|(_, s)| w(s) + 1).sum::<u16>() > avail {
-                start += 1;
-            }
-        }
-        let bg = c.selection.map_or_else(Style::default, |b| Style::default().bg(b));
-        let mut x = 1u16;
-        if start > 0 {
-            f.render_widget(Paragraph::new(Span::styled("‹", grey)), Rect::new(0, y, 1, 1));
-        }
-        for (gi, spans) in items.into_iter().skip(start) {
-            let iw = w(&spans);
-            if x + iw > lw.saturating_sub(1) {
-                f.render_widget(Paragraph::new(Span::styled("›", grey)), Rect::new(lw.saturating_sub(2), y, 1, 1));
-                break;
-            }
-            let mut line = Line::from(spans);
-            if self.ws_mode && here == Some(gi) {
-                line = line.style(bg);
-            }
-            f.render_widget(Paragraph::new(line), Rect::new(x, y, iw, 1));
-            self.hits.push((y, x, x + iw, Hit::Space(gi)));
-            x += iw + 1;
         }
     }
 
@@ -1077,7 +1015,7 @@ impl Popup<'_> {
                     .find(|(y, x0, x1, _)| *y == m.row && m.column >= *x0 && m.column < *x1);
                 match hit.map(|h| &h.3) {
                     Some(Hit::Chip(c)) => return self.chip(*c),
-                    Some(Hit::Space(gi)) => return Some(Some(Go::Ws(self.list.groups[*gi].ws.clone()))),
+                    Some(Hit::Ws(gi)) => return Some(Some(Go::Ws(self.list.groups[*gi].ws.clone()))),
                     // 分隔线上写着收起了几个：点它展开
                     Some(Hit::Row(Row::Header(gi))) => {
                         if !self.list.hidden(*gi).is_empty() {
