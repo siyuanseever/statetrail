@@ -137,7 +137,8 @@ struct Trail {
     hits: Vec<(u16, Item)>,
     header_len: u16,
     rows: Vec<Vec<Button>>, // 表头最上面的按钮（宽版一行，窄版两行）
-    head_ln: usize,         // 宽版「N 轮」那一行（点它什么都不做）
+    head_ln: usize,         // 宽版「N 轮」那一行（点它什么都不做，除了后面的「/ 搜索」）
+    search_at: Option<(usize, usize)>, // 「N 轮」那一行里「/ 搜索」那几个字的列（和 hot 一样从表头文字的第 0 列数）
     mc: (Option<u64>, (String, String)),
     last_kick: Option<Instant>,
     view: (usize, usize, usize),
@@ -315,6 +316,10 @@ impl Trail {
     fn header_click(&mut self, ln: usize, col: usize, narrow: bool, tx: &Sender<Msg>) {
         if self.up_at.is_some_and(|(l, slot)| l == ln && col <= slot + 1) {
             self.page(-1); // 点在行首 ▲ 那一段（偏一格也算）
+            return;
+        }
+        if !narrow && ln == self.head_ln && self.search_at.is_some_and(|(a, b)| (a..b + 1).contains(&col.saturating_sub(1))) {
+            self.open_search();
             return;
         }
         if let Some(&(i, start, _)) = self.hot.iter().find(|(i, a, b)| *i + 1 == ln && (*a..*b).contains(&col.saturating_sub(1))) {
@@ -915,9 +920,7 @@ fn button_rows(narrow: bool) -> Vec<Vec<Button>> {
 /// 最底下那一行：Git（宽版后面带没提交的文件数）、文件。
 fn foot_buttons(narrow: bool) -> Vec<Button> {
     let b = |name: &str, act: &str, extra: usize| (header::icon(name), act.to_owned(), extra);
-    // 最后一个是「/ 搜索」：告诉你按 / 能搜，点它也一样
-    let search = (if narrow { "/".to_owned() } else { t("/ 搜索") }, "search".to_owned(), 0);
-    vec![b("git", "git", if narrow { 0 } else { 4 }), b("files", "files", 0), search]
+    vec![b("git", "git", if narrow { 0 } else { 4 }), b("files", "files", 0)]
 }
 
 fn spawn_threads(tx: &Sender<Msg>, me: &str) {
@@ -1046,6 +1049,7 @@ pub fn run(cfg: Config, target: &str) {
         header_len: 0,
         rows: Vec::new(),
         head_ln: 0,
+        search_at: None,
         mc: (None, (String::new(), String::new())),
         last_kick: None,
         view: (0, 0, 0),
@@ -1147,6 +1151,7 @@ fn run_loop(
                 slot: 0,
                 buttons: Some(&s.rows),
                 git: s.git,
+                search_hint: s.search.is_none(),
             };
             let head_len = if narrow {
                 header::narrow(size.width as usize, &info).len()
@@ -1222,6 +1227,11 @@ fn run_loop(
             } else {
                 let (lines, head_ln) = header::wide(size.width as usize, &info);
                 s.head_ln = head_ln;
+                s.search_at = lines.get(head_ln - 1).and_then(|l| {
+                    let p = crate::render::plain(l);
+                    let w = t("/ 搜索");
+                    p.rfind(w.as_str()).map(|b| (UnicodeWidthStr::width(&p[..b]), UnicodeWidthStr::width(&p[..b + w.len()])))
+                });
                 lines
             };
             s.up_at = (slot > 0 && counts.0 > 0).then_some((head.len(), slot));

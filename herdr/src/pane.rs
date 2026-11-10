@@ -1598,6 +1598,7 @@ fn run_loop(
                 slot: 0,
                 buttons: None,
                 git: None,
+                search_hint: s.search.is_none(),
             };
             let head_len = if narrow {
                 header::narrow(size.width as usize, &info).len()

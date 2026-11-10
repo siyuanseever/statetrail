@@ -200,6 +200,7 @@ pub struct Info<'a> {
     pub slot: usize,     // ▲ / ▼ 在行首占几列（一屏放得下就是 0）
     pub buttons: Option<&'a [Vec<Button>]>, // 表头最上面的几行按钮；None = herdr 版那一行（wide_buttons / narrow_buttons）
     pub git: Option<usize>,                 // Git 按钮后面写的没提交的文件数（按钮带了额外宽度才写）
+    pub search_hint: bool,                  // 「N 轮」后面写「/ 搜索」（搜索框开着时不写，下面一行就是搜索框）
 }
 
 /// 宽版表头；第二个值是「N 轮」那一行是第几行（从 1 数，点它什么都不做）。
@@ -214,13 +215,14 @@ pub fn wide(width: usize, i: &Info) -> (Vec<SLine>, usize) {
     } else {
         t("{n} 轮").replace("{n}", &i.turns.to_string())
     };
-    let mut head_line: SLine = Vec::new();
+    let mut head_line: SLine = vec![(std::mem::take(&mut head), None)];
+    if i.search_hint && i.found {
+        head_line.push((" · ".into(), Some(c.grey)));
+        head_line.push((t("/ 搜索"), Some(c.grey)));
+    }
     if let Some(msg) = i.flash {
-        head_line.push((std::mem::take(&mut head), None));
         head_line.push((" · ".into(), None));
         head_line.push((msg.to_owned(), Some(c.warn)));
-    } else {
-        head_line.push((head, None));
     }
     let rows = i.buttons.map_or_else(|| vec![wide_buttons()], <[Vec<Button>]>::to_vec);
     let mut lines: Vec<SLine> = rows.iter().map(|r| buttons_line_with(r, i.usage, true, i.git)).collect();
