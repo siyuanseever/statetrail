@@ -242,7 +242,8 @@ pub fn wide(width: usize, i: &Info) -> (Vec<SLine>, usize) {
         &acct,
         claude::auto_compact_at(),
     ));
-    if (!i.model.is_empty() || !acct.is_empty()) && multi_account() {
+    // ⇄ 只跟在画出来的账号后面：账号因为窄被丢了，⇄ 也不画（不然看着能点、点了没反应）
+    if !acct.is_empty() && find_word(&render::plain(&lines[first]), &acct).is_some() && multi_account() {
         lines[first].push((format!(" {}", icon("switch")), Some(c.accent))); // 模型 · 账号那一行
     }
     lines.push(render::lead(head_line, i.up_tag, i.slot)); // 「N 轮」那一行放在最后，▲ 在它最前面
@@ -289,7 +290,7 @@ pub fn narrow(width: usize, i: &Info) -> Vec<SLine> {
             if !lead.is_empty() {
                 l.push((format!("{} ", lead.join(" ")), Some(c.grey)));
             }
-            l.push((ULTRA_SHORT.to_owned(), Some(c.accent)));
+            l.push((ULTRA_SHORT.to_owned(), Some(c.warn)));
             l
         };
         let field = [line(true), line(false)].into_iter().find(|l| width_of(l) <= room);
@@ -363,11 +364,21 @@ pub fn hot_spots_after(lines: &[SLine], accts: &[String], skip: usize) -> Vec<(u
     let mut out = Vec::new();
     for (i, l) in lines.iter().enumerate().skip(skip) {
         let p = render::plain(l);
-        if let Some(b) = accts.iter().filter(|a| !a.is_empty()).find_map(|a| p.find(a.as_str())) {
+        if let Some(b) = accts.iter().filter(|a| !a.is_empty()).find_map(|a| find_word(&p, a)) {
             out.push((i, p[..b].width(), p.width()));
         }
     }
     out
+}
+
+/// 按整词找：前面是行首或空白，后面是行尾或空白。账号简称可能就一个字母（l），
+/// 不按整词会落在「ultra」「siyuan.l2」这些字里面（2026-11-11 审查发现 ultra 标签被当成了账号按钮）。
+fn find_word(hay: &str, w: &str) -> Option<usize> {
+    hay.match_indices(w).map(|(b, _)| b).find(|&b| {
+        let before = hay[..b].chars().next_back().is_none_or(char::is_whitespace);
+        let after = hay[b + w.len()..].chars().next().is_none_or(char::is_whitespace);
+        before && after
+    })
 }
 
 #[cfg(test)]
@@ -405,7 +416,7 @@ mod tests {
         let plain = plain_lines(&on);
         assert!(plain.contains("Opus 5.5 high · ultracode"), "{plain}");
         let seg = on.iter().flatten().find(|s| s.0 == "ultracode").expect("ultracode 单独一段");
-        assert_eq!(seg.1, Some(colors().accent));
+        assert_eq!(seg.1, Some(colors().warn));
         let (off, _) = wide(60, &info(&cfg, false));
         let plain = plain_lines(&off);
         assert!(plain.contains("Opus 5.5 high") && !plain.contains("ultra"), "{plain}");
@@ -425,7 +436,7 @@ mod tests {
             if width >= 12 {
                 assert!(plain.contains("high ultra"), "width {width}: {plain}");
                 let seg = on.iter().flatten().find(|s| s.0 == "ultra").expect("ultra 单独一段");
-                assert_eq!(seg.1, Some(colors().accent));
+                assert_eq!(seg.1, Some(colors().warn));
             }
             let off = plain_lines(&narrow(width, &info(&cfg, false)));
             assert!(!off.contains("ultra"), "width {width}: {off}");
@@ -445,5 +456,16 @@ mod tests {
         let lines = vec![l("buttons"), l("Opus 5.5 high · siyuan.l x"), l("✦ Opus5.5"), l("@ siyuan.l2 ⇄")];
         let got = super::hot_spots(&lines, &["siyuan.l2".into(), "l2".into()]);
         assert_eq!(got, vec![(3, 2, 13)]);
+    }
+
+    /// 账号简称只有一个字母（l）时，不能落在「ultra」「ultracode」里面
+    #[test]
+    fn hot_spots_skip_ultra_tag() {
+        let l = |s: &str| vec![(s.to_owned(), None)];
+        let accts = ["siyuan.l".to_owned(), "l".to_owned()];
+        let lines = vec![l("buttons"), l("✦ Opus5.5"), l("◔ high ultra"), l("Opus 5.5 high · ultracode ⇄")];
+        assert_eq!(super::hot_spots(&lines, &accts), vec![]);
+        let lines = vec![l("buttons"), l("Opus 5.5 high · ultracode · siyuan.l ⇄")];
+        assert_eq!(super::hot_spots(&lines, &accts), vec![(1, 28, 38)]);
     }
 }

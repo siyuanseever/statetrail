@@ -262,8 +262,18 @@ pub fn status_lines(
     let bw = bar_w(width, &tails);
     let mut lines = Vec::new();
     if !model.is_empty() || !tag.is_empty() || !account.is_empty() {
-        let lead: Vec<&str> = [model, tag].into_iter().filter(|s| !s.is_empty()).collect();
-        let lead = lead.join(" · ");
+        // 窄的时候宁可不显示账号，也别把模型截了（Python 版按字数比，不按显示宽度）。
+        // 有标签（ultracode）时先把标签缩成前 5 个字（ultra），还放不下才丢账号
+        let lead = |t: &str| [model, t].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
+        let fits = |t: &str| format!("{} · {account}", lead(t)).chars().count() <= width;
+        let short: String = tag.chars().take(5).collect();
+        let (tag, show_acct) = match account.is_empty() {
+            true => (tag, false),
+            false if fits(tag) => (tag, true),
+            false if fits(&short) => (short.as_str(), true),
+            false => (tag, false),
+        };
+        let lead = lead(tag);
         let mut head: SLine = Vec::new();
         if !model.is_empty() {
             head.push(seg(model, c.grey));
@@ -272,10 +282,9 @@ pub fn status_lines(
             if !model.is_empty() {
                 head.push(seg(" · ", c.grey));
             }
-            head.push(seg(tag, c.accent));
+            head.push(seg(tag, c.warn));
         }
-        // 窄的时候宁可不显示账号，也别把模型截了（Python 版按字数比，不按显示宽度）
-        if !account.is_empty() && format!("{lead} · {account}").chars().count() <= width {
+        if show_acct {
             let text = if lead.is_empty() { account.to_owned() } else { format!(" · {account}") };
             head.push(seg(text, c.grey));
         }
@@ -344,5 +353,14 @@ mod tests {
         assert_eq!(super::left_str(37.0 * 60.0), "   37m");
         assert_eq!(super::left_str(2.0 * 3600.0 + 60.0), "2h01m");
         assert_eq!(super::left_str(86400.0 + 14.0 * 3600.0), "1d14h");
+    }
+
+    /// 有 ultracode 标签又放不下账号：先缩成 ultra，还放不下才丢账号
+    #[test]
+    fn status_tag_shrinks_before_account() {
+        let first = |w: usize| super::plain(&super::status_lines(w, "Opus 5.5 high", "ultracode", "", None, "siyuan.l", None)[0]);
+        assert_eq!(first(60), "Opus 5.5 high · ultracode · siyuan.l");
+        assert_eq!(first(36), "Opus 5.5 high · ultra · siyuan.l");
+        assert_eq!(first(30), "Opus 5.5 high · ultracode");
     }
 }
