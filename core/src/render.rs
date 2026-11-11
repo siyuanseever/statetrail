@@ -237,7 +237,16 @@ pub fn fit(s: Seg, width: usize) -> SLine {
 }
 
 /// 宽版表头里的模型 / 账号一行，加上 ctx / 5h / 7d 三条柱子（有几行看有没有数据）。
-pub fn status_lines(width: usize, model: &str, ctx: &str, u: Option<&Usage>, account: &str, compact_at: Option<u64>) -> Vec<SLine> {
+/// tag 跟在模型（effort）后面、换 accent 色（开着 ultracode 时是「ultracode」），空的就不写。
+pub fn status_lines(
+    width: usize,
+    model: &str,
+    tag: &str,
+    ctx: &str,
+    u: Option<&Usage>,
+    account: &str,
+    compact_at: Option<u64>,
+) -> Vec<SLine> {
     let c = colors();
     let width = 24.max(width.saturating_sub(2));
     let parsed = parse_ctx(ctx);
@@ -252,17 +261,28 @@ pub fn status_lines(width: usize, model: &str, ctx: &str, u: Option<&Usage>, acc
     }
     let bw = bar_w(width, &tails);
     let mut lines = Vec::new();
-    if !model.is_empty() || !account.is_empty() {
-        let mut head = model.to_owned();
-        // 窄的时候宁可不显示账号，也别把模型截了（Python 版按字数比，不按显示宽度）
-        if !account.is_empty() && format!("{model} · {account}").chars().count() <= width {
-            head = if model.is_empty() {
-                account.to_owned()
-            } else {
-                format!("{model} · {account}")
-            };
+    if !model.is_empty() || !tag.is_empty() || !account.is_empty() {
+        let lead: Vec<&str> = [model, tag].into_iter().filter(|s| !s.is_empty()).collect();
+        let lead = lead.join(" · ");
+        let mut head: SLine = Vec::new();
+        if !model.is_empty() {
+            head.push(seg(model, c.grey));
         }
-        lines.push(vec![seg(head, c.grey)]);
+        if !tag.is_empty() {
+            if !model.is_empty() {
+                head.push(seg(" · ", c.grey));
+            }
+            head.push(seg(tag, c.accent));
+        }
+        // 窄的时候宁可不显示账号，也别把模型截了（Python 版按字数比，不按显示宽度）
+        if !account.is_empty() && format!("{lead} · {account}").chars().count() <= width {
+            let text = if lead.is_empty() { account.to_owned() } else { format!(" · {account}") };
+            head.push(seg(text, c.grey));
+        }
+        if head.is_empty() {
+            head.push(seg("", c.grey));
+        }
+        lines.push(head);
     }
     match (parsed, ctx_tail) {
         (Some((pct, _)), Some(tail)) => {

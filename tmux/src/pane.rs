@@ -1151,6 +1151,7 @@ fn run_loop(
                 buttons: Some(&s.rows),
                 git: s.git,
                 search_hint: s.search.is_none(),
+                ultra: s.tr.as_ref().is_some_and(|t| t.ultra),
             };
             let head_len = if narrow {
                 header::narrow(size.width as usize, &info).len()

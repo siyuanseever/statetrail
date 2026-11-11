@@ -257,6 +257,9 @@ pub struct Transcript {
     size: u64,
     pub stops: Vec<Stop>,
     pub title: Option<String>,
+    /// 这个会话开着 ultracode 没有：主线上最后一条 ultra_effort_enter / ultra_effort_exit 说了算。
+    /// 跟着轮次一起增量读，开的那条在几百轮以前也认得到，不用每次刷新表头都从头翻（slice 读的那一段不算数）。
+    pub ultra: bool,
     buf: Vec<u8>,
 }
 
@@ -268,6 +271,7 @@ impl Transcript {
             size: u64::MAX,
             stops: Vec::new(),
             title: None,
+            ultra: false,
             buf: Vec::new(),
         }
     }
@@ -348,6 +352,21 @@ impl Transcript {
     }
 
     fn feed(&mut self, e: &Raw) {
+        // ultracode 开 / 关：{"type":"attachment","attachment":{"type":"ultra_effort_enter","reminderType":"full"|"sparse"}}，
+        // 关是 ultra_effort_exit。只认主线的；workflow_keyword_request 是一轮话里点名用 Workflow，不算开着
+        if e.kind.as_deref() == Some("attachment") && e.sidechain != Some(true) {
+            match e.attachment.as_ref().and_then(|a| a.kind.as_deref()) {
+                Some("ultra_effort_enter") => {
+                    self.ultra = true;
+                    return;
+                }
+                Some("ultra_effort_exit") => {
+                    self.ultra = false;
+                    return;
+                }
+                _ => {}
+            }
+        }
         match (e.kind.as_deref(), e.subtype.as_deref()) {
             (Some("ai-title"), _) => {
                 if let Some(t) = e.ai_title.as_deref()
@@ -425,5 +444,80 @@ mod tests {
         assert_eq!(got.len(), 2, "{got:?}");
         assert_eq!(got[0], ("整理路由脚本".into(), "在看了".into()));
         assert_eq!(got[1], ("我的意思是不要我提醒， 你来直接当这个路由".into(), "明白，我直接当路由".into()));
+    }
+
+    const ENTER: &str = r#"{"isSidechain":false,"attachment":{"type":"ultra_effort_enter","reminderType":"full"},"type":"attachment","uuid":"e1"}"#;
+    const SPARSE: &str = r#"{"isSidechain":false,"attachment":{"type":"ultra_effort_enter","reminderType":"sparse"},"type":"attachment","uuid":"e2"}"#;
+    const EXIT: &str = r#"{"isSidechain":false,"attachment":{"type":"ultra_effort_exit"},"type":"attachment","uuid":"x1"}"#;
+    const SIDE_EXIT: &str = r#"{"isSidechain":true,"attachment":{"type":"ultra_effort_exit"},"type":"attachment","uuid":"x2"}"#;
+    const SIDE_ENTER: &str = r#"{"isSidechain":true,"attachment":{"type":"ultra_effort_enter","reminderType":"full"},"type":"attachment","uuid":"e3"}"#;
+    const KEYWORD: &str = r#"{"isSidechain":false,"attachment":{"type":"workflow_keyword_request"},"type":"attachment","uuid":"k1"}"#;
+
+    fn ultra(name: &str, lines: &[&str]) -> bool {
+        let dir = std::env::temp_dir().join(format!("st-ultra-{}-{name}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let f = dir.join("t.jsonl");
+        std::fs::write(&f, lines.join("\n") + "\n").unwrap();
+        let mut tr = Transcript::new(&f);
+        tr.update();
+        let _ = std::fs::remove_dir_all(&dir);
+        tr.ultra
+    }
+
+    /// ultracode 开没开：主线上最后一条 enter / exit 说了算；子 Agent 的、workflow_keyword_request 都不算
+    #[test]
+    fn ultra_follows_last_enter_or_exit() {
+        let user = r#"{"type":"user","uuid":"u1","origin":{"kind":"human"},"message":{"role":"user","content":"hi"}}"#;
+        assert!(!ultra("none", &[user]));
+        assert!(ultra("enter", &[user, ENTER]));
+        assert!(!ultra("enter-exit", &[ENTER, user, EXIT]));
+        assert!(ultra("exit-enter", &[EXIT, user, ENTER]));
+        assert!(ultra("sparse", &[ENTER, EXIT, SPARSE]));
+        assert!(ultra("side-exit", &[ENTER, SIDE_EXIT]));
+        assert!(!ultra("side-enter", &[SIDE_ENTER]));
+        assert!(!ultra("keyword", &[KEYWORD]));
+        assert!(!ultra("keyword-after-exit", &[ENTER, EXIT, KEYWORD]));
+        // 不影响切轮次
+        let got = parse(&[user, ENTER, r#"{"type":"assistant","uuid":"a1","message":{"role":"assistant","content":[{"type":"text","text":"好"}]}}"#]);
+        assert_eq!(got, vec![("hi".into(), "好".into())]);
+    }
+
+    /// 开的那条在很早以前（后面跟了 5 MB 的回复，超过 last_usage 往回翻的 4 MB）：增量读照样认得，后面再关也跟得上
+    #[test]
+    fn ultra_far_back_and_incremental() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("st-ultra-{}-far", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let f = dir.join("t.jsonl");
+        std::fs::write(&f, format!("{ENTER}\n")).unwrap();
+        let mut tr = Transcript::new(&f);
+        assert!(tr.update());
+        assert!(tr.ultra);
+        let filler = "x".repeat(10_000);
+        let reply = format!(r#"{{"type":"assistant","uuid":"a","message":{{"role":"assistant","content":[{{"type":"text","text":"{filler}"}}]}}}}"#);
+        let mut w = std::fs::OpenOptions::new().append(true).open(&f).unwrap();
+        for _ in 0..600 {
+            writeln!(w, "{reply}").unwrap();
+        }
+        w.flush().unwrap();
+        assert!(std::fs::metadata(&f).unwrap().len() > 5 << 20);
+        let before = tr.pos;
+        assert!(tr.update());
+        assert!(tr.ultra, "只读了新追加的部分，前面开的还算数");
+        assert!(tr.pos > before);
+        // 整份从头读一遍（新开轨迹）也一样
+        let mut fresh = Transcript::new(&f);
+        fresh.update();
+        assert!(fresh.ultra);
+        // 半行还没写完：不算，写完了才算
+        write!(w, "{}", &EXIT[..20]).unwrap();
+        w.flush().unwrap();
+        tr.update();
+        assert!(tr.ultra);
+        writeln!(w, "{}", &EXIT[20..]).unwrap();
+        w.flush().unwrap();
+        tr.update();
+        assert!(!tr.ultra);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

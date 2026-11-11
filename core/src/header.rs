@@ -12,6 +12,8 @@ use crate::theme::colors;
 
 pub const SLOT: usize = 3; // 图标按钮占 3 格（空格 + 图标 + 空格）
 pub const GAP: usize = 1;
+const ULTRA: &str = "ultracode"; // 开着 ultracode：宽版 effort 后面写全称
+const ULTRA_SHORT: &str = "ultra"; // 窄版 effort 那一行后面写短的
 
 /// 图标三档：(nerd, unicode, text)。文字档的字跟着界面语言。
 const ICONS: [(&str, &str, &str, &str); 16] = [
@@ -201,6 +203,7 @@ pub struct Info<'a> {
     pub buttons: Option<&'a [Vec<Button>]>, // 表头最上面的几行按钮；None = herdr 版那一行（wide_buttons / narrow_buttons）
     pub git: Option<usize>,                 // Git 按钮后面写的没提交的文件数（按钮带了额外宽度才写）
     pub search_hint: bool,                  // 「N 轮」后面写「/ 搜索」（搜索框开着时不写，下面一行就是搜索框）
+    pub ultra: bool,                        // 这个会话开着 ultracode：effort 后面标一下，只显示不能点（关着什么都不写）
 }
 
 /// 宽版表头；第二个值是「N 轮」那一行是第几行（从 1 数，点它什么都不做）。
@@ -228,11 +231,12 @@ pub fn wide(width: usize, i: &Info) -> (Vec<SLine>, usize) {
     let mut lines: Vec<SLine> = rows.iter().map(|r| buttons_line_with(r, i.usage, true, i.git)).collect();
     let first = lines.len(); // 模型 · 账号那一行
     let acct = claude::current_account(i.cfg_dir);
-    // 模型名和 effort 中间空一格分开（Opus 5.5 high），斜线就不要了；只显示不能点
+    // 模型名和 effort 中间空一格分开（Opus 5.5 high），斜线就不要了；只显示不能点。开着 ultracode 再跟一段「· ultracode」
     let model = i.model.replacen('/', " ", 1);
     lines.extend(render::status_lines(
         width,
         &model,
+        if i.ultra { ULTRA } else { "" },
         i.ctx,
         i.usage,
         &acct,
@@ -271,13 +275,31 @@ pub fn narrow(width: usize, i: &Info) -> Vec<SLine> {
         vec![(if ic.is_empty() { text.to_owned() } else { format!("{ic} {text}") }, Some(c.grey))]
     };
     let mut fields: Vec<(u8, SLine)> = Vec::new();
-    if !i.model.is_empty() {
-        // `Opus 5.5/high` → 一行 `Opus5.5`、下一行 `high`：effort 单独一行、自带图标（用户定的）；只显示不能点
-        let (name, effort) = i.model.split_once('/').unwrap_or((i.model, ""));
+    // `Opus 5.5/high` → 一行 `Opus5.5`、下一行 `high`：effort 单独一行、自带图标（用户定的）；只显示不能点
+    let (name, effort) = i.model.split_once('/').unwrap_or((i.model, ""));
+    if !name.is_empty() {
         fields.push((2, tagged("model", &name.replace(' ', ""))));
-        if !effort.is_empty() {
-            fields.push((2, tagged("effort", effort)));
+    }
+    if i.ultra {
+        // 开着 ultracode：effort 那一行后面跟「ultra」（换 accent 色）。放不下先去掉图标，还放不下才不写 ultra
+        let line = |ic: bool| -> SLine {
+            let ic = if ic { icon("effort") } else { String::new() };
+            let lead: Vec<&str> = [ic.as_str(), effort].into_iter().filter(|s| !s.is_empty()).collect();
+            let mut l: SLine = Vec::new();
+            if !lead.is_empty() {
+                l.push((format!("{} ", lead.join(" ")), Some(c.grey)));
+            }
+            l.push((ULTRA_SHORT.to_owned(), Some(c.accent)));
+            l
+        };
+        let field = [line(true), line(false)].into_iter().find(|l| width_of(l) <= room);
+        match field {
+            Some(l) => fields.push((2, l)),
+            None if !effort.is_empty() => fields.push((2, tagged("effort", effort))),
+            None => {}
         }
+    } else if !effort.is_empty() {
+        fields.push((2, tagged("effort", effort)));
     }
     // 账号写完整用户名（用户定的），放不下才退成和别的账号不一样的那截
     let acct_field = |acct: &str| {
@@ -350,6 +372,73 @@ pub fn hot_spots_after(lines: &[SLine], accts: &[String], skip: usize) -> Vec<(u
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    fn info<'a>(cfg_dir: &'a Path, ultra: bool) -> Info<'a> {
+        Info {
+            cfg_dir,
+            model: "Opus 5.5/high",
+            ctx: "",
+            usage: None,
+            found: true,
+            turns: 3,
+            gone: 0,
+            flash: None,
+            up_tag: "",
+            slot: 0,
+            buttons: None,
+            git: None,
+            search_hint: false,
+            ultra,
+        }
+    }
+
+    fn no_cfg() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("st-header-nocfg-{}", std::process::id())) // 不存在：没有账号
+    }
+
+    /// 开着 ultracode：宽版写「Opus 5.5 high · ultracode」，ultracode 那段是 accent 色；关着一个字都不多
+    #[test]
+    fn wide_ultra_tag() {
+        let cfg = no_cfg();
+        let (on, _) = wide(60, &info(&cfg, true));
+        let plain = plain_lines(&on);
+        assert!(plain.contains("Opus 5.5 high · ultracode"), "{plain}");
+        let seg = on.iter().flatten().find(|s| s.0 == "ultracode").expect("ultracode 单独一段");
+        assert_eq!(seg.1, Some(colors().accent));
+        let (off, _) = wide(60, &info(&cfg, false));
+        let plain = plain_lines(&off);
+        assert!(plain.contains("Opus 5.5 high") && !plain.contains("ultra"), "{plain}");
+    }
+
+    /// 窄版：effort 那一行后面跟「ultra」，每行都不超过窗格宽度；太窄先丢图标，再窄就不写
+    #[test]
+    fn narrow_ultra_tag() {
+        let cfg = no_cfg();
+        for width in [17, 14, 12, 8] {
+            let room = 4.max(width - 2);
+            let on = narrow(width, &info(&cfg, true));
+            for l in &on {
+                assert!(width_of(l) <= room, "width {width}: {:?}", render::plain(l));
+            }
+            let plain = plain_lines(&on);
+            if width >= 12 {
+                assert!(plain.contains("high ultra"), "width {width}: {plain}");
+                let seg = on.iter().flatten().find(|s| s.0 == "ultra").expect("ultra 单独一段");
+                assert_eq!(seg.1, Some(colors().accent));
+            }
+            let off = plain_lines(&narrow(width, &info(&cfg, false)));
+            assert!(!off.contains("ultra"), "width {width}: {off}");
+        }
+        let plain = plain_lines(&narrow(17, &info(&cfg, true)));
+        assert!(plain.contains(&format!("{} high ultra", icon("effort"))), "{plain}");
+        // 没有 effort 的模型也标得出来
+        let mut i = info(&cfg, true);
+        i.model = "Haiku 4.5";
+        let plain = plain_lines(&narrow(17, &i));
+        assert!(plain.contains("ultra"), "{plain}");
+    }
+
     #[test]
     fn hot_spots_find_account() {
         let l = |s: &str| vec![(s.to_owned(), None)];
