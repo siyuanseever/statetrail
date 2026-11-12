@@ -157,6 +157,7 @@ pub struct Status {
     data: Value,
     own: HashMap<PathBuf, (SystemTime, Option<(String, String, u32)>)>, // Claude 的会话文件 → (窗格, 会话 id, Claude 进程号)
     own_sid: HashMap<String, String>,
+    jobs: HashMap<PathBuf, (String, String)>, // 后台会话（claude agents 里那些，kind bg）的会话文件 → (jobId, 会话 id)
     agents_mtime: Option<SystemTime>,
     agents: Value,
 }
@@ -199,6 +200,9 @@ impl Status {
                     continue;
                 }
                 let v: Option<Value> = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok());
+                if let Some((job, sid)) = v.as_ref().and_then(|v| Some((v["jobId"].as_str()?, v["sessionId"].as_str()?))) {
+                    self.jobs.insert(path.clone(), (job.to_owned(), sid.to_owned()));
+                }
                 let got = v.and_then(|v| {
                     let pane = v["tmux"].as_str()?.rsplit('.').next()?.to_owned();
                     let pid = v["pid"].as_u64()? as u32;
@@ -210,6 +214,7 @@ impl Status {
         }
         let before = self.own.len();
         self.own.retain(|p, _| seen.contains(p));
+        self.jobs.retain(|p, _| seen.contains(p));
         if changed || self.own.len() != before {
             self.own_sid = mine(self.own.values().filter_map(|(_, g)| g.clone()).collect());
             return true;
@@ -222,6 +227,11 @@ impl Status {
             .get(pane)
             .cloned()
             .or_else(|| self.data[pane]["session_id"].as_str().filter(|s| !s.is_empty()).map(str::to_owned))
+    }
+
+    /// 后台任务 id → 会话 id（`claude attach <jobId>` 的窗格靠它认会话）
+    pub fn job_session(&self, job: &str) -> Option<String> {
+        self.jobs.values().find(|(j, _)| j == job).map(|(_, s)| s.clone())
     }
 
     /// 这个窗格的 Claude 用的是哪个配置目录（哪个账号）：它的会话文件在哪个目录下就是哪个；认不出就 None
@@ -287,12 +297,43 @@ impl Status {
 
 /// 这一格的会话 id：先看状态文件，没有就按 Claude 进程找 <配置目录>/sessions/<进程号>.json（hook 还没写过的会话）。
 pub fn session_of(pane: &str, st: &Status) -> Option<String> {
-    st.session(pane).or_else(|| {
+    st.session(pane).or_else(|| session_by_process(pane, st))
+}
+
+/// 只按窗格里的 Claude 进程认会话（不看钩子的状态文件：那里的会话 id 可能早过期了）。要起 ps。
+pub fn session_by_process(pane: &str, st: &Status) -> Option<String> {
+    {
         let pid = claude_pid(pane)?;
         let f = statetrail_core::claude::config_dir_of_pid(Some(pid))
             .join("sessions")
             .join(format!("{pid}.json"));
-        let v: Value = serde_json::from_slice(&std::fs::read(f).ok()?).ok()?;
-        v["sessionId"].as_str().map(str::to_owned)
-    })
+        match std::fs::read(f).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) {
+            Some(v) => v["sessionId"].as_str().map(str::to_owned),
+            // `claude attach <jobId>`：attach 进程自己没有会话文件，会话在后台进程那份里，按 jobId 找
+            // （2026-11-12 用户：attach 着的窗格旁边轨迹是一块空白，「上面没有任何信息」）
+            None => st.job_session(&attach_job(pid)?),
+        }
+    }
+}
+
+/// 这个进程是 `claude attach <jobId>` 的话，返回 jobId
+fn attach_job(pid: u32) -> Option<String> {
+    let out = Command::new("ps").args(["-o", "args=", "-p", &pid.to_string()]).output().ok()?;
+    parse_attach(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn parse_attach(args: &str) -> Option<String> {
+    let mut w = args.split_whitespace();
+    w.find(|a| *a == "attach")?;
+    w.next().filter(|j| !j.starts_with('-')).map(str::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn attach_job_from_args() {
+        assert_eq!(super::parse_attach("/Users/x/.local/bin/claude attach 32b71444\n").as_deref(), Some("32b71444"));
+        assert_eq!(super::parse_attach("claude --resume abc").as_deref(), None);
+        assert_eq!(super::parse_attach("claude attach").as_deref(), None);
+    }
 }

@@ -85,6 +85,7 @@ struct Trail {
     cfg_dir: PathBuf,
     tr: Option<Transcript>,
     tr_size: Option<u64>,
+    dead_sid: Option<String>, // 找不到对话记录的会话 id（钩子状态文件里过期的）：别再信它，改按进程认
     state: Option<String>, // 状态文件里这个 Claude 的状态：running / blocked / input …
     opened: Option<String>,
     expanded: bool,
@@ -158,11 +159,13 @@ impl Trail {
             changed |= state != self.state;
             self.state = state;
         }
-        let sid = self.st.session(&self.target).or_else(|| {
-            // hook 还没写过这个会话：按 Claude 进程认（要起 ps，隔一会儿才试一次）
-            if self.sid.is_none() && Instant::now() >= self.next_sid_check {
+        // 钩子状态文件里的会话 id 找不到对话记录（dead_sid）就不信它（2026-11-12：attach 着的窗格记的是早过期的 id，轨迹一直空白）
+        let sid = self.st.session(&self.target).filter(|s| self.dead_sid.as_ref() != Some(s)).or_else(|| {
+            // hook 还没写过这个会话，或者写的那个找不到：按 Claude 进程认（要起 ps，隔一会儿才试一次）
+            let stuck = self.sid.is_none() || self.sid == self.dead_sid;
+            if stuck && Instant::now() >= self.next_sid_check {
                 self.next_sid_check = Instant::now() + Duration::from_secs(5);
-                tmux::session_of(&self.target, &self.st)
+                tmux::session_by_process(&self.target, &self.st).or_else(|| self.sid.clone())
             } else {
                 self.sid.clone()
             }
@@ -192,10 +195,14 @@ impl Trail {
             self.rescan();
             changed = true;
         }
-        if let (Some(sid), None) = (&self.sid, &self.tr)
-            && let Some(p) = claude::transcript_path(sid, &self.cfg_dir)
-        {
-            self.tr = Some(Transcript::new(&p));
+        if let (Some(sid), None) = (&self.sid, &self.tr) {
+            match claude::transcript_path(sid, &self.cfg_dir) {
+                Some(p) => {
+                    self.tr = Some(Transcript::new(&p));
+                    self.dead_sid = None;
+                }
+                None => self.dead_sid = self.sid.clone(),
+            }
         }
         if let Some(tr) = &mut self.tr {
             let size = std::fs::metadata(&tr.path).map(|m| m.len()).ok();
@@ -995,6 +1002,7 @@ pub fn run(cfg: Config, target: &str) {
         cfg_dir: claude::default_cfg(),
         tr: None,
         tr_size: None,
+        dead_sid: None,
         state: None,
         opened: None,
         expanded: false,
