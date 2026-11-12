@@ -85,7 +85,8 @@ struct Trail {
     cfg_dir: PathBuf,
     tr: Option<Transcript>,
     tr_size: Option<u64>,
-    dead_sid: Option<String>, // 找不到对话记录的会话 id（钩子状态文件里过期的）：别再信它，改按进程认
+    dead_sid: HashSet<String>, // 找不到对话记录的会话 id（钩子状态文件里过期的）：别再信它，改按进程认。
+    // 是集合不是一个：只记一个的话，按进程认出真的那个以后又会去信钩子那个，两头来回换、轨迹一直重读、闪（2026-11-12）
     state: Option<String>, // 状态文件里这个 Claude 的状态：running / blocked / input …
     opened: Option<String>,
     expanded: bool,
@@ -160,9 +161,9 @@ impl Trail {
             self.state = state;
         }
         // 钩子状态文件里的会话 id 找不到对话记录（dead_sid）就不信它（2026-11-12：attach 着的窗格记的是早过期的 id，轨迹一直空白）
-        let sid = self.st.session(&self.target).filter(|s| self.dead_sid.as_ref() != Some(s)).or_else(|| {
+        let sid = self.st.session(&self.target).filter(|s| !self.dead_sid.contains(s)).or_else(|| {
             // hook 还没写过这个会话，或者写的那个找不到：按 Claude 进程认（要起 ps，隔一会儿才试一次）
-            let stuck = self.sid.is_none() || self.sid == self.dead_sid;
+            let stuck = self.sid.as_ref().is_none_or(|s| self.dead_sid.contains(s));
             if stuck && Instant::now() >= self.next_sid_check {
                 self.next_sid_check = Instant::now() + Duration::from_secs(5);
                 tmux::session_by_process(&self.target, &self.st).or_else(|| self.sid.clone())
@@ -199,9 +200,11 @@ impl Trail {
             match claude::transcript_path(sid, &self.cfg_dir) {
                 Some(p) => {
                     self.tr = Some(Transcript::new(&p));
-                    self.dead_sid = None;
+                    self.dead_sid.remove(sid); // 新会话第一句话之前还没有对话记录，有了就恢复
                 }
-                None => self.dead_sid = self.sid.clone(),
+                None => {
+                    self.dead_sid.insert(sid.clone());
+                }
             }
         }
         if let Some(tr) = &mut self.tr {
@@ -1002,7 +1005,7 @@ pub fn run(cfg: Config, target: &str) {
         cfg_dir: claude::default_cfg(),
         tr: None,
         tr_size: None,
-        dead_sid: None,
+        dead_sid: HashSet::new(),
         state: None,
         opened: None,
         expanded: false,
