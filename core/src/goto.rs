@@ -665,7 +665,7 @@ impl Popup {
             return;
         }
         let wide = area.width >= 100;
-        let lw = if self.preview && wide { area.width * 11 / 20 } else { area.width };
+        let lw = if self.preview && wide { area.width * 9 / 20 } else { area.width };
 
         // ---- 标题栏 ----
         let all: Vec<Agent> = self.list.groups.iter().flat_map(|g| g.agents.iter().cloned()).collect();
@@ -813,17 +813,18 @@ impl Popup {
             let agents: Vec<Agent> = self.list.groups.iter().flat_map(|g| g.agents.iter().cloned()).collect();
             let labels: HashMap<String, String> = self.list.groups.iter().map(|g| (g.ws.clone(), g.label.clone())).collect();
             let sel = if self.ws_mode { None } else { self.sel_pane.clone() };
-            let rows = self.flow.rows(&agents, &labels, sel.as_deref(), pb.width.saturating_sub(4) as usize);
-            let gh = (rows.len() as u16 + 2).clamp(5, (pb.height / 2).max(5)).min(pb.height);
+            let most = (pb.height * 3 / 5).max(8);
+            let (lines, boxes) =
+                self.flow.draw(&agents, &labels, sel.as_deref(), pb.width.saturating_sub(4) as usize, most.saturating_sub(2) as usize);
+            let gh = (lines.len() as u16 + 2).clamp(5, most).min(pb.height);
             let gb = Rect::new(pb.x, pb.y, pb.width, gh);
             let gi = framed(f, gb, &t("流程 · 最近 24 小时"), Span::raw(""), false);
-            for (k, row) in rows.into_iter().take(gi.height as usize).enumerate() {
-                let y = gi.y + k as u16;
-                if let Some(p) = row.pane {
-                    self.hits.push((y, gi.x, gi.x + gi.width, Hit::Pick(p)));
+            for (y, x0, x1, p) in boxes {
+                if y < gi.height {
+                    self.hits.push((gi.y + y, gi.x + x0, gi.x + x1, Hit::Pick(p)));
                 }
-                f.render_widget(Paragraph::new(row.line), Rect::new(gi.x, y, gi.width, 1));
             }
+            f.render_widget(Paragraph::new(lines), gi);
             let tb = Rect::new(pb.x, pb.y + gh, pb.width, pb.height - gh);
             self.draw_preview(f, tb, cur);
         }

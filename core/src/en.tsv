@@ -175,3 +175,4 @@ h/l 工作区	h/l workspace
 流程 · 最近 24 小时	Flow · last 24h
 最近一天这些 Claude 之间没有传过话	No messages between these Claudes in the last day
 没传过话：	No messages: 
+框是 Claude，箭头从传话的指向收话的，数字是传了几次，亮的线是十分钟内传过的	Boxes are Claudes; arrows go from sender to receiver; numbers count messages; bright lines are from the last 10 minutes
