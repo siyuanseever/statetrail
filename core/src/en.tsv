@@ -153,3 +153,20 @@ Esc 清掉搜索	Esc clears
 没装 yazi（brew install yazi）	yazi is not installed (brew install yazi)
 没装 lazygit（brew install lazygit）	lazygit is not installed (brew install lazygit)
 h/l 工作区	h/l workspace
+在等你	waiting
+做完了	done
+在跑	running
+看过了	seen
+关闭	close
+选	move
+工作区	session
+直跳	jump to #
+全部	all
+收起	fold
+预览	preview
+搜索	search
+跳转	go
+动态	Activity
+在等你确认	is waiting for you
+开始干活	started working
+做完了，看过了	finished, seen

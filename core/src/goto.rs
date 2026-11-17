@@ -775,64 +775,99 @@ impl Popup<'_> {
         None
     }
 
+    /// 整个浮窗（2026-11-17 改版，样子借 troupe 的面板：用户「他的界面非常的酷炫呀，我也想要这样的界面」）：
+    /// 顶上一条标题栏（名字、LIVE、各状态几个、时钟），左边「Claude」框是列表、下面「动态」框是最近谁变了状态，
+    /// 右边框是选中那个的实时画面，最底下一行是按键提示（能点的照样能点）。按键和以前一样。
     fn draw(&mut self, f: &mut ratatui::Frame) {
         let c = colors();
         let area = f.area();
         let grey = Style::default().fg(c.grey);
+        let key_st = Style::default().fg(c.accent).add_modifier(Modifier::BOLD);
         self.hits.clear();
+        if area.height < 6 || area.width < 30 {
+            return;
+        }
         let wide = area.width >= 100;
-        let lw = if self.preview && wide { area.width / 2 } else { area.width };
+        let lw = if self.preview && wide { area.width * 11 / 20 } else { area.width };
 
-        // 第一行：能点的词画成按钮（和 tmux 版提示栏一样）
-        let chips: Vec<(String, Chip)> = vec![
-            (t("✕ 关闭"), Chip::Close),
-            (t("j/k 选"), Chip::Plain),
-            (t("数字直跳"), Chip::Plain),
-            (t("h/l 工作区"), Chip::Plain),
-            (if self.list.show_all { t("a 收起") } else { t("a 全部") }, Chip::All),
-            (t("p 预览"), Chip::Preview),
-            (t("/ 搜索"), Chip::Search),
-            (t("Enter 跳转"), Chip::Enter),
+        // ---- 标题栏 ----
+        let all: Vec<Agent> = self.list.groups.iter().flat_map(|g| g.agents.iter().cloned()).collect();
+        let n = |s: &[State]| all.iter().filter(|a| s.contains(&a.state)).count();
+        let mut title = vec![
+            Span::styled(" ◆ statetrail ", Style::default().fg(c.accent).add_modifier(Modifier::BOLD)),
+            Span::styled("goto", grey),
+            Span::raw("   "),
+            Span::styled(" ● LIVE ", Style::default().fg(c.done).add_modifier(Modifier::BOLD | Modifier::REVERSED)),
+            Span::raw("   "),
+        ];
+        for (st, num, label) in [
+            (State::Wait, n(&[State::Wait]), t("在等你")),
+            (State::Done, n(&[State::Done]), t("做完了")),
+            (State::Run, n(&[State::Run]), t("在跑")),
+            (State::Read, n(&[State::Read, State::Stale]), t("看过了")),
+        ] {
+            let (b, bst) = badge(st);
+            let icon = b.split(' ').next().unwrap_or("").to_owned();
+            let style = if num == 0 { Style::default().fg(c.dim) } else { bst };
+            title.push(Span::styled(format!("{icon} {num} "), style));
+            title.push(Span::styled(format!("{label}   "), if num == 0 { Style::default().fg(c.dim) } else { grey }));
+        }
+        f.render_widget(Paragraph::new(Line::from(title)), Rect::new(0, 0, area.width, 1));
+        let clock = chrono::Local::now().format("%H:%M ").to_string();
+        let cw = clock.width() as u16;
+        f.render_widget(Paragraph::new(Span::styled(clock, grey)), Rect::new(area.width - cw, 0, cw, 1));
+
+        // ---- 底部按键提示 ----
+        let hint_y = area.height - 1;
+        let pairs: Vec<(&str, String, Chip)> = vec![
+            ("q", t("关闭"), Chip::Close),
+            ("j/k", t("选"), Chip::Plain),
+            ("h/l", t("工作区"), Chip::Plain),
+            ("1-9", t("直跳"), Chip::Plain),
+            ("a", if self.list.show_all { t("收起") } else { t("全部") }, Chip::All),
+            ("p", t("预览"), Chip::Preview),
+            ("/", t("搜索"), Chip::Search),
+            ("⏎", t("跳转"), Chip::Enter),
         ];
         let mut x = 1u16;
-        let mut marks = Vec::new();
-        for (label, kind) in &chips {
-            let text = format!(" {label} ");
-            let w = text.width() as u16;
-            if x + w > lw {
+        for (k, label, kind) in &pairs {
+            let w = (k.width() + 1 + label.width()) as u16 + 2;
+            if x + w > area.width {
                 break;
             }
-            let st = if *kind == Chip::Plain { grey } else { Style::default() };
-            f.render_widget(Paragraph::new(Line::from(Span::styled(text, st))), Rect::new(x, 0, w, 1));
+            let line = Line::from(vec![Span::styled(*k, key_st), Span::raw(" "), Span::styled(label.clone(), grey)]);
+            f.render_widget(Paragraph::new(line), Rect::new(x, hint_y, w, 1));
             if *kind != Chip::Plain {
-                marks.push((x, x + w));
-                self.hits.push((0, x, x + w, Hit::Chip(*kind)));
+                self.hits.push((hint_y, x, x + w, Hit::Chip(*kind)));
             }
             x += w + 1;
         }
-        for (x0, x1) in marks {
-            crate::ui::mark(f, 0, x0, x1, false);
-        }
 
+        // ---- 左边：Claude 列表框，下面动态框 ----
+        let body_y = 1u16;
+        let body_h = area.height.saturating_sub(2);
+        let mut feed: Vec<&Agent> = all.iter().filter(|a| a.age >= 0).collect();
+        feed.sort_by_key(|a| a.age);
+        let feed_h = if body_h >= 22 { (feed.len().min(6) as u16 + 2).max(3) } else { 0 };
+        let list_box = Rect::new(0, body_y, lw, body_h - feed_h);
+        let total = self.stops().len();
+        let pos = self.stops().iter().position(|&r| self.is_sel(r)).map_or(0, |i| i + 1);
+        let inner = framed(f, list_box, "Claude", Span::styled(format!("{pos}/{total}"), grey), self.ws_mode);
         let cur = self.fix_sel();
-        // 顶上那一排 session 去掉了（用户 2026-11-10：「顶部的横排 session 可以去掉了吧」）：选中 session 时亮的是列表里它那一行
-        let mut top = 1u16;
+        let mut top = inner.y;
         if let Some(q) = &self.list.query {
             let line = Line::from(vec![
-                Span::styled("  / ", Style::default().fg(c.accent)),
+                Span::styled("/ ", Style::default().fg(c.accent)),
                 Span::raw(q.clone()),
                 Span::styled("▏", Style::default().fg(c.accent)),
                 Span::styled(format!("   {}", t("Esc 清掉搜索")), grey),
             ]);
-            f.render_widget(Paragraph::new(line), Rect::new(0, top, lw, 1));
+            f.render_widget(Paragraph::new(line), Rect::new(inner.x, top, inner.width, 1));
             top += 1;
         }
-
-        // 列表：Claude 一个一行，工作区之间一条分隔线（写着工作区的名字；h / l 选中的就是这一行）
         let rows = self.list.rows();
-        let room = area.height.saturating_sub(top) as usize;
+        let room = (inner.y + inner.height).saturating_sub(top) as usize;
         if let Some(i) = cur.and_then(|r| rows.iter().position(|&x| x == r)) {
-            // 选中的是一组的第一个时把组名也露出来
             let want = if i > 0 && matches!(rows[i - 1], Row::Header(_)) { i - 1 } else { i };
             if want < self.offset {
                 self.offset = want;
@@ -841,64 +876,78 @@ impl Popup<'_> {
             }
         }
         self.offset = self.offset.min(rows.len().saturating_sub(room.max(1)));
-        let total = self.stops().len();
-        let pos = self.stops().iter().position(|&r| self.is_sel(r)).map_or(0, |i| i + 1);
-        let counter = format!("{pos}/{total} ");
-        let cw = counter.width() as u16;
-        if lw > cw + x {
-            f.render_widget(Paragraph::new(Span::styled(counter, grey)), Rect::new(lw - cw, 0, cw, 1));
-        }
         if rows.is_empty() {
-            let msg = if self.list.query.is_some() {
-                t("没有对得上的")
-            } else {
-                t("还没有开着的 Claude")
-            };
-            f.render_widget(Paragraph::new(Span::styled(format!("  {msg}"), grey)), Rect::new(0, top, lw, 1));
+            let msg = if self.list.query.is_some() { t("没有对得上的") } else { t("还没有开着的 Claude") };
+            f.render_widget(Paragraph::new(Span::styled(format!(" {msg}"), grey)), Rect::new(inner.x, top, inner.width, 1));
         }
         let bg = c.selection.map_or_else(Style::default, |b| Style::default().bg(b));
         for (k, &r) in rows.iter().skip(self.offset).take(room).enumerate() {
             let y = top + k as u16;
-            let mut line = render_row(&self.list, r, lw.saturating_sub(3) as usize);
+            let mut line = render_row(&self.list, r, inner.width.saturating_sub(2) as usize);
             let on = self.is_sel(r);
-            line.spans
-                .insert(0, Span::styled(if on { "▌ " } else { "  " }, Style::default().fg(c.accent)));
+            line.spans.insert(0, Span::styled(if on { "▌ " } else { "  " }, Style::default().fg(c.accent)));
             if on {
                 line = line.style(bg);
             }
             if let Row::Header(gi) = r {
-                // 分隔线的 span：▌、──、名字、─…、[收起说明、──]；收起说明那段留给「点了展开」
                 let note = if line.spans.len() > 4 { line.spans[4].content.width() as u16 + 2 } else { 0 };
-                self.hits.push((y, 0, lw.saturating_sub(1 + note), Hit::Ws(gi)));
+                self.hits.push((y, inner.x, inner.x + inner.width.saturating_sub(note), Hit::Ws(gi)));
             }
-            f.render_widget(Paragraph::new(line), Rect::new(0, y, lw.saturating_sub(1), 1));
-            self.hits.push((y, 0, lw, Hit::Row(r)));
+            f.render_widget(Paragraph::new(line), Rect::new(inner.x, y, inner.width, 1));
+            self.hits.push((y, inner.x, inner.x + inner.width, Hit::Row(r)));
         }
 
+        if feed_h > 0 {
+            let fb = Rect::new(0, body_y + body_h - feed_h, lw, feed_h);
+            let fi = framed(f, fb, &t("动态"), Span::raw(""), false);
+            let now = now();
+            let lines: Vec<Line> = feed
+                .iter()
+                .take(fi.height as usize)
+                .map(|a| {
+                    let at = chrono::DateTime::from_timestamp(now - a.age, 0)
+                        .map(|d| d.with_timezone(&chrono::Local).format("%H:%M").to_string())
+                        .unwrap_or_default();
+                    let (b, st) = badge(a.state);
+                    let icon = b.split(' ').next().unwrap_or("").to_owned();
+                    let verb = match a.state {
+                        State::Wait => t("在等你确认"),
+                        State::Run => t("开始干活"),
+                        State::Done => t("做完了"),
+                        State::Read | State::Stale => t("做完了，看过了"),
+                    };
+                    let ws = self.list.groups.iter().find(|g| g.ws == a.ws).map(|g| g.label.clone()).unwrap_or_default();
+                    Line::from(vec![
+                        Span::styled(format!("{at}  "), grey),
+                        Span::styled(format!("{icon} "), st),
+                        Span::styled(format!("{ws} · "), Style::default().fg(c.cyan)),
+                        Span::styled(a.name.clone(), Style::default().add_modifier(Modifier::BOLD)),
+                        Span::styled(format!("  {verb}"), grey),
+                    ])
+                })
+                .collect();
+            f.render_widget(Paragraph::new(lines), fi);
+        }
+
+        // ---- 右边：预览框 ----
         if lw < area.width {
-            let px = lw + 1;
-            let pw = area.width - px;
-            let ph = area.height;
-            let sep: Vec<Line> = (0..ph).map(|_| Line::from(Span::styled("│", Style::default().fg(c.dim)))).collect();
-            f.render_widget(Paragraph::new(sep), Rect::new(lw, 0, 1, ph));
-            self.draw_preview(f, Rect::new(px + 1, 0, pw.saturating_sub(1), ph), cur);
+            let pb = Rect::new(lw, body_y, area.width - lw, body_h);
+            self.draw_preview(f, pb, cur);
         }
     }
 
-    fn draw_preview(&mut self, f: &mut ratatui::Frame, r: Rect, cur: Option<Row>) {
+    fn draw_preview(&mut self, f: &mut ratatui::Frame, pb: Rect, cur: Option<Row>) {
         let c = colors();
         let grey = Style::default().fg(c.grey);
-        let Some(cur) = cur else { return };
+        let Some(cur) = cur else {
+            framed(f, pb, &t("预览"), Span::raw(""), false);
+            return;
+        };
         if let Row::Header(gi) = cur {
             // 工作区那一层：每个 Claude 一张卡片——状态、名字、多久，开场那句话，最后回了什么
             let g = self.list.groups[gi].clone();
-            let mut lines = vec![
-                Line::from(Span::styled(
-                    format!("{} {}", g.num, g.label),
-                    Style::default().fg(c.cyan).add_modifier(Modifier::BOLD),
-                )),
-                Line::default(),
-            ];
+            let r = framed(f, pb, &format!("{} {}", g.num, g.label), Span::raw(""), true);
+            let mut lines = Vec::new();
             for a in &g.agents {
                 let (b, st) = badge(a.state);
                 lines.push(Line::from(vec![
@@ -920,6 +969,8 @@ impl Popup<'_> {
             return;
         }
         let Some(a) = self.list.agent(cur).cloned() else { return };
+        let (b, st) = badge(a.state);
+        let r = framed(f, pb, &a.name, Span::styled(b.trim().to_owned(), st), false);
         let fresh = self
             .shot
             .as_ref()
@@ -931,16 +982,13 @@ impl Popup<'_> {
         let body_h = r.height.saturating_sub(2) as usize;
         let lines: Vec<Line> = shot[shot.len().saturating_sub(body_h)..].iter().map(|l| ansi_line(l)).collect();
         f.render_widget(Paragraph::new(lines), Rect::new(r.x, r.y, r.width, body_h as u16));
-        let (b, st) = badge(a.state);
         let foot_y = r.y + r.height.saturating_sub(1);
         f.render_widget(
-            Paragraph::new(Span::styled("─".repeat(r.width as usize), Style::default().fg(c.dim))),
+            Paragraph::new(Span::styled("┄".repeat(r.width as usize), Style::default().fg(c.dim))),
             Rect::new(r.x, foot_y.saturating_sub(1), r.width, 1),
         );
         let foot = Line::from(vec![
-            Span::styled(b, st),
-            Span::raw("  "),
-            Span::raw(age_text(a.state, a.age)),
+            Span::styled(age_text(a.state, a.age), st),
             Span::styled(format!("   {}", tilde(&a.cwd)), grey),
         ]);
         f.render_widget(Paragraph::new(foot), Rect::new(r.x, foot_y, r.width, 1));
@@ -1035,6 +1083,24 @@ impl Popup<'_> {
         }
         None
     }
+}
+
+/// 一个圆角框，标题写在上边框上（左边 title，右边 right），返回框里面能画的地方。lit：框用强调色（选中的是这一层）。
+fn framed(f: &mut ratatui::Frame, r: Rect, title: &str, right: Span<'static>, lit: bool) -> Rect {
+    use ratatui::widgets::{Block, BorderType, Borders};
+    let c = colors();
+    let border = Style::default().fg(if lit { c.accent } else { c.dim });
+    let mut b = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(border)
+        .title(Line::from(Span::styled(format!(" {title} "), Style::default().fg(c.cyan).add_modifier(Modifier::BOLD))));
+    if !right.content.is_empty() {
+        b = b.title(Line::from(vec![Span::raw(" "), right, Span::raw(" ")]).right_aligned());
+    }
+    let inner = b.inner(r);
+    f.render_widget(b, r);
+    Rect::new(inner.x + 1, inner.y, inner.width.saturating_sub(2), inner.height)
 }
 
 fn go(host: &dyn Host, g: Go) {

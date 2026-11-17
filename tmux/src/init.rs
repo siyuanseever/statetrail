@@ -61,7 +61,7 @@ pub fn init() {
             "bind-key",
             "g",
             "run-shell",
-            &format!("tmux display-popup -c '#{{client_name}}' -w 95% -h 85% -E \"{e} goto '#{{pane_id}}' '#{{client_name}}'\""),
+            &format!("tmux display-popup -B -c '#{{client_name}}' -w 100% -h 100% -E \"{e} goto '#{{pane_id}}' '#{{client_name}}'\""),
         ]);
         push(&["bind-key", "T", "run-shell", &format!("{e} toggle '#{{pane_id}}'")]);
         let click = tmux::run(&["list-keys", "-T", "root", "MouseDown1Status"]).unwrap_or_default();
