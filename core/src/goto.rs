@@ -11,7 +11,7 @@ use crossterm::{execute, terminal};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use serde_json::{Value, json};
@@ -60,6 +60,8 @@ pub struct Agent {
     pub cwd: String,
     pub age: i64,
     pub reply: String,
+    pub sid: Option<String>,
+    pub path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -93,8 +95,6 @@ pub struct Space {
 pub trait Host {
     fn spaces(&self) -> Vec<Space>;
     fn agents(&self) -> Vec<Seen>;
-    /// 这个窗格现在的屏幕，带颜色（ANSI）
-    fn screen(&self, pane: &str) -> String;
     fn go_pane(&self, a: &Agent);
     fn go_ws(&self, ws: &str);
     /// 是从哪个窗格打开的（列表里那一个标出来）
@@ -226,12 +226,8 @@ fn collect(host: &dyn Host, cache: &mut Cache) -> Vec<Group> {
     let now = now();
     for p in host.agents() {
         let status = p.status.as_str();
-        let info = p
-            .sid
-            .as_deref()
-            .and_then(|sid| cache.path(sid))
-            .map(|path| cache.info(&path, status == "working"))
-            .unwrap_or_default();
+        let path = p.sid.as_deref().and_then(|sid| cache.path(sid));
+        let info = path.as_ref().map(|path| cache.info(path, status == "working")).unwrap_or_default();
         let since = match status {
             "working" => info.last_ts.unwrap_or(info.mtime),
             _ => info.mtime,
@@ -262,6 +258,8 @@ fn collect(host: &dyn Host, cache: &mut Cache) -> Vec<Group> {
             cwd: p.cwd,
             age,
             reply: info.reply,
+            sid: p.sid.clone(),
+            path,
         };
         if let Some(g) = groups.iter_mut().find(|g| g.ws == p.ws) {
             g.agents.push(agent);
@@ -475,129 +473,6 @@ pub fn render_row(l: &List, r: Row, width: usize) -> Line<'static> {
     }
 }
 
-// ---- 预览：选中那个 Claude 的实时画面 ------------------------------------------------------
-
-fn sgr(mut st: Style, p: &str) -> Style {
-    let v: Vec<u16> = if p.is_empty() {
-        vec![0]
-    } else {
-        p.split([';', ':']).map(|x| x.parse().unwrap_or(0)).collect()
-    };
-    let mut i = 0;
-    while i < v.len() {
-        match v[i] {
-            0 => st = Style::default(),
-            1 => st = st.add_modifier(Modifier::BOLD),
-            2 => st = st.add_modifier(Modifier::DIM),
-            3 => st = st.add_modifier(Modifier::ITALIC),
-            4 => st = st.add_modifier(Modifier::UNDERLINED),
-            7 => st = st.add_modifier(Modifier::REVERSED),
-            22 => st = st.remove_modifier(Modifier::BOLD | Modifier::DIM),
-            23 => st = st.remove_modifier(Modifier::ITALIC),
-            24 => st = st.remove_modifier(Modifier::UNDERLINED),
-            27 => st = st.remove_modifier(Modifier::REVERSED),
-            n @ 30..=37 => st = st.fg(Color::Indexed((n - 30) as u8)),
-            39 => st = st.fg(Color::Reset),
-            n @ 40..=47 => st = st.bg(Color::Indexed((n - 40) as u8)),
-            49 => st = st.bg(Color::Reset),
-            n @ 90..=97 => st = st.fg(Color::Indexed((n - 90 + 8) as u8)),
-            n @ 100..=107 => st = st.bg(Color::Indexed((n - 100 + 8) as u8)),
-            n @ (38 | 48) => {
-                let c = match v.get(i + 1) {
-                    Some(5) => {
-                        i += 2;
-                        v.get(i).map(|&x| Color::Indexed(x as u8))
-                    }
-                    Some(2) => {
-                        i += 4;
-                        match (v.get(i - 2), v.get(i - 1), v.get(i)) {
-                            (Some(&r), Some(&g), Some(&b)) => Some(Color::Rgb(r as u8, g as u8, b as u8)),
-                            _ => None,
-                        }
-                    }
-                    _ => None,
-                };
-                if let Some(c) = c {
-                    st = if n == 38 { st.fg(c) } else { st.bg(c) };
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    st
-}
-
-/// 一行带颜色的终端文字（只认 SGR，其余转义丢掉）。
-pub fn ansi_line(s: &str) -> Line<'static> {
-    let mut spans = Vec::new();
-    let mut st = Style::default();
-    let mut buf = String::new();
-    let mut it = s.chars().peekable();
-    while let Some(ch) = it.next() {
-        match ch {
-            '\x1b' => {
-                if it.peek() == Some(&'[') {
-                    it.next();
-                    let mut p = String::new();
-                    let mut fin = ' ';
-                    for c in it.by_ref() {
-                        if c.is_ascii_alphabetic() || c == '~' {
-                            fin = c;
-                            break;
-                        }
-                        p.push(c);
-                    }
-                    if fin == 'm' {
-                        if !buf.is_empty() {
-                            spans.push(Span::styled(std::mem::take(&mut buf), st));
-                        }
-                        st = sgr(st, &p);
-                    }
-                } else {
-                    it.next();
-                }
-            }
-            '\r' => {}
-            '\u{a0}' => buf.push(' '),
-            c => buf.push(c),
-        }
-    }
-    if !buf.is_empty() {
-        spans.push(Span::styled(buf, st));
-    }
-    Line::from(spans)
-}
-
-fn plain(s: &str) -> String {
-    ansi_line(s).spans.iter().map(|s| s.content.as_ref()).collect()
-}
-
-fn is_rule(s: &str) -> bool {
-    let p = plain(s);
-    let p = p.trim();
-    p.chars().filter(|&c| c == '─').count() >= 10 && p.starts_with('─')
-}
-
-/// 去掉 Claude 屏幕最下面的输入框（上下两条横线夹着 ❯）和它下面的提示行，再去掉末尾的空行。
-pub fn strip_chrome(lines: Vec<String>) -> Vec<String> {
-    let mut lines = lines;
-    let n = lines.len();
-    let rules: Vec<usize> = (n.saturating_sub(10)..n).filter(|&i| is_rule(&lines[i])).collect();
-    if rules.len() >= 2 {
-        lines.truncate(rules[rules.len() - 2]);
-    }
-    while lines.last().is_some_and(|l| plain(l).trim().is_empty()) {
-        lines.pop();
-    }
-    lines
-}
-
-fn screen(host: &dyn Host, pane: &str) -> Vec<String> {
-    let text = host.screen(pane);
-    strip_chrome(text.split('\n').map(|l| l.trim_end_matches('\r').to_owned()).collect())
-}
-
 // ---- 浮窗 -------------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -616,8 +491,7 @@ enum Hit {
     Ws(usize), // session 分隔线上除「⋯ 收起」以外的地方：点了切到那个 session
 }
 
-struct Popup<'h> {
-    host: &'h dyn Host,
+struct Popup {
     list: List,
     cache: Cache,
     ws_mode: bool,
@@ -627,7 +501,8 @@ struct Popup<'h> {
     offset: usize,
     digits: String,
     digit_at: Instant,
-    shot: Option<(String, Instant, Vec<String>)>,
+    /// 右边那块要的：对话记录末尾那一段读出来的轮次、模型 / 上下文那一行；文件长度没变就不重读
+    trs: HashMap<PathBuf, (u64, Transcript, String)>,
     hits: Vec<(u16, u16, u16, Hit)>,
 }
 
@@ -640,7 +515,7 @@ fn pref_path() -> PathBuf {
     crate::state_dir().join("goto.json")
 }
 
-impl Popup<'_> {
+impl Popup {
     fn stops(&self) -> Vec<Row> {
         if self.ws_mode {
             // 顶上那一排：每个有 Claude 的工作区都在，不管搜索和收起
@@ -971,27 +846,82 @@ impl Popup<'_> {
         let Some(a) = self.list.agent(cur).cloned() else { return };
         let (b, st) = badge(a.state);
         let r = framed(f, pb, &a.name, Span::styled(b.trim().to_owned(), st), false);
-        let fresh = self
-            .shot
-            .as_ref()
-            .is_some_and(|(p, at, _)| *p == a.pane && at.elapsed() < Duration::from_millis(500));
-        if !fresh {
-            self.shot = Some((a.pane.clone(), Instant::now(), screen(self.host, &a.pane)));
-        }
-        let shot = self.shot.as_ref().map(|s| s.2.clone()).unwrap_or_default();
-        let body_h = r.height.saturating_sub(2) as usize;
-        let lines: Vec<Line> = shot[shot.len().saturating_sub(body_h)..].iter().map(|l| ansi_line(l)).collect();
-        f.render_widget(Paragraph::new(lines), Rect::new(r.x, r.y, r.width, body_h as u16));
-        let foot_y = r.y + r.height.saturating_sub(1);
-        f.render_widget(
-            Paragraph::new(Span::styled("┄".repeat(r.width as usize), Style::default().fg(c.dim))),
-            Rect::new(r.x, foot_y.saturating_sub(1), r.width, 1),
-        );
-        let foot = Line::from(vec![
+        // 右边是这个会话最近几轮（用户 2026-11-17：右边的实时画面「没啥意思，换掉吧」，选了「这个会话的轮次」）：
+        // 头两行是状态多久、目录，模型和上下文；下面是轮次，最新的在最下面，开新章的地方画一条章名线。
+        let mut head = vec![Line::from(vec![
             Span::styled(age_text(a.state, a.age), st),
-            Span::styled(format!("   {}", tilde(&a.cwd)), grey),
-        ]);
-        f.render_widget(Paragraph::new(foot), Rect::new(r.x, foot_y, r.width, 1));
+            Span::styled(format!("  ·  {}", tilde(&a.cwd)), grey),
+        ])];
+        let w = r.width as usize;
+        let Some(path) = a.path.clone() else {
+            head.push(Line::from(Span::styled(t("找不到它的对话记录"), grey)));
+            f.render_widget(Paragraph::new(head), r);
+            return;
+        };
+        let size = std::fs::metadata(&path).map_or(0, |m| m.len());
+        if self.trs.get(&path).is_none_or(|e| e.0 != size) {
+            // 只读末尾：最大的对话记录有 1.7 GB，整份读要好几秒。轮次不够填满就往前多读，最多 16 MB
+            let mut back = TAIL;
+            let tr = loop {
+                let tr = Transcript::slice(&path, size.saturating_sub(back), size);
+                if tr.visible().len() >= 40 || back >= size || back >= 16 << 20 {
+                    break tr;
+                }
+                back *= 4;
+            };
+            let (m, ctx) = crate::claude::model_ctx(&path);
+            let model = [m, ctx].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join("  ·  ");
+            self.trs.insert(path.clone(), (size, tr, model));
+        }
+        let (_, tr, model) = &self.trs[&path];
+        if !model.is_empty() {
+            head.push(Line::from(Span::styled(model.clone(), grey)));
+        }
+        head.push(Line::default());
+        let stops = tr.visible();
+        let marks = a.sid.as_deref().map(crate::chapters::Marks::load).unwrap_or_default();
+        // 章名按轮次 id 认（读的只是末尾一段，不能用从第一轮数起的章）：Haiku 起的章名，或手动标的「从这轮开新章」
+        let chapter = |s: &crate::transcript::Stop| match marks.manual.get(&s.id) {
+            Some(false) => None,
+            Some(true) => Some(marks.auto.get(&s.id).cloned().unwrap_or_else(|| oneline(&s.prompt))),
+            None => marks.auto.get(&s.id).cloned(),
+        };
+        let room = (r.height as usize).saturating_sub(head.len());
+        // 从最新一轮往回凑，凑满为止；每轮两行（你说的、它怎么开头回的），开新章的那轮多一行章名
+        let mut body: Vec<Line> = Vec::new();
+        for i in (0..stops.len()).rev() {
+            let s = stops[i];
+            let mut lines = Vec::new();
+            if let Some(title) = chapter(s) {
+                let title = clip(&title, w.saturating_sub(6), true);
+                let fill = w.saturating_sub(title.width() + 4);
+                lines.push(Line::from(vec![
+                    Span::styled("── ", Style::default().fg(c.dim)),
+                    Span::styled(title, Style::default().fg(c.cyan)),
+                    Span::styled(format!(" {}", "─".repeat(fill)), Style::default().fg(c.dim)),
+                ]));
+            }
+            lines.push(Line::from(vec![
+                Span::styled("❯ ", Style::default().fg(c.accent)),
+                Span::styled(clip(&oneline(&s.prompt), w.saturating_sub(2), true), Style::default().add_modifier(Modifier::BOLD)),
+            ]));
+            if !s.reply.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    format!("  → {}", clip(&oneline(&s.reply), w.saturating_sub(4), true)),
+                    grey,
+                )));
+            }
+            if body.len() + lines.len() > room {
+                break;
+            }
+            lines.extend(body);
+            body = lines;
+        }
+        if stops.is_empty() {
+            body.push(Line::from(Span::styled(t("还没有说过话"), grey)));
+        }
+        head.extend(body);
+        f.render_widget(Paragraph::new(head), r);
     }
 
     /// 一个键：Some(Some(去处)) 跳过去、Some(None) 关掉、None 接着等。
@@ -1147,7 +1077,6 @@ pub fn run(host: &dyn Host) {
         .and_then(|v| v["preview"].as_bool())
         .unwrap_or(true);
     let mut p = Popup {
-        host,
         list: List {
             groups,
             caller: host.caller(),
@@ -1162,7 +1091,7 @@ pub fn run(host: &dyn Host) {
         offset: 0,
         digits: String::new(),
         digit_at: Instant::now(),
-        shot: None,
+        trs: HashMap::new(),
         hits: Vec::new(),
     };
     let _ = event::poll(Duration::ZERO);
@@ -1228,6 +1157,8 @@ mod tests {
             cwd: "/tmp".into(),
             age: 90,
             reply: String::new(),
+            sid: None,
+            path: None,
         }
     }
 
@@ -1299,27 +1230,5 @@ mod tests {
         // 没有对话记录（herdr 没报会话 id）时不写「0 秒前」
         assert_eq!(age_text(State::Done, -1), "");
         assert!(!age_text(State::Done, 0).is_empty());
-    }
-
-    #[test]
-    fn ansi_colours_survive() {
-        let l = ansi_line("\x1b[38;2;1;2;3mab\x1b[0m\x1b[1mc\x1b[0m\r");
-        assert_eq!(l.spans.len(), 2);
-        assert_eq!(l.spans[0].style.fg, Some(Color::Rgb(1, 2, 3)));
-        assert!(l.spans[1].style.add_modifier.contains(Modifier::BOLD));
-    }
-
-    #[test]
-    fn input_box_is_cut() {
-        let rule = "─".repeat(30);
-        let lines = vec![
-            "hello".to_string(),
-            String::new(),
-            format!("{rule} proj ─"),
-            "❯ ".into(),
-            rule.clone(),
-            "  auto mode".into(),
-        ];
-        assert_eq!(strip_chrome(lines), vec!["hello".to_string()]);
     }
 }

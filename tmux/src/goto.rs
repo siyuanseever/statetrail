@@ -79,10 +79,6 @@ impl Host for Tmux {
             .collect()
     }
 
-    fn screen(&self, pane: &str) -> String {
-        tmux::run(&["capture-pane", "-e", "-p", "-t", pane]).unwrap_or_default()
-    }
-
     fn go_pane(&self, a: &Agent) {
         let mut args = vec!["switch-client"];
         self.switch(&mut args);

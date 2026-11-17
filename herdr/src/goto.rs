@@ -45,13 +45,6 @@ impl Host for Herdr {
             .collect()
     }
 
-    fn screen(&self, pane: &str) -> String {
-        herdr::call("pane.read", json!({"pane_id": pane, "source": "visible", "format": "ansi"}))
-            .ok()
-            .and_then(|r| r["read"]["text"].as_str().map(str::to_owned))
-            .unwrap_or_default()
-    }
-
     fn go_pane(&self, a: &Agent) {
         let _ = herdr::call("workspace.focus", json!({"workspace_id": a.ws}));
         let _ = herdr::call("tab.focus", json!({"tab_id": a.tab}));
