@@ -5,6 +5,7 @@
 pub mod chapters;
 pub mod claude;
 pub mod detect;
+pub mod flow;
 pub mod goto;
 pub mod header;
 pub mod i18n;

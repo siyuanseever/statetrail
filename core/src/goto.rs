@@ -489,6 +489,7 @@ enum Hit {
     Row(Row),
     Chip(Chip),
     Ws(usize), // session 分隔线上除「⋯ 收起」以外的地方：点了切到那个 session
+    Pick(String), // 右上流程图里的一个 Claude：点了选中它
 }
 
 struct Popup {
@@ -503,6 +504,7 @@ struct Popup {
     digit_at: Instant,
     /// 右边那块要的：对话记录末尾那一段读出来的轮次、模型 / 上下文那一行；文件长度没变就不重读
     trs: HashMap<PathBuf, (u64, Transcript, String)>,
+    flow: crate::flow::Flow,
     hits: Vec<(u16, u16, u16, Hit)>,
 }
 
@@ -807,7 +809,23 @@ impl Popup {
         // ---- 右边：预览框 ----
         if lw < area.width {
             let pb = Rect::new(lw, body_y, area.width - lw, body_h);
-            self.draw_preview(f, pb, cur);
+            // 右上：所有 Claude 之间谁给谁传过话（flow.rs）；右下：选中那个的轮次
+            let agents: Vec<Agent> = self.list.groups.iter().flat_map(|g| g.agents.iter().cloned()).collect();
+            let labels: HashMap<String, String> = self.list.groups.iter().map(|g| (g.ws.clone(), g.label.clone())).collect();
+            let sel = if self.ws_mode { None } else { self.sel_pane.clone() };
+            let rows = self.flow.rows(&agents, &labels, sel.as_deref(), pb.width.saturating_sub(4) as usize);
+            let gh = (rows.len() as u16 + 2).clamp(5, (pb.height / 2).max(5)).min(pb.height);
+            let gb = Rect::new(pb.x, pb.y, pb.width, gh);
+            let gi = framed(f, gb, &t("流程 · 最近 24 小时"), Span::raw(""), false);
+            for (k, row) in rows.into_iter().take(gi.height as usize).enumerate() {
+                let y = gi.y + k as u16;
+                if let Some(p) = row.pane {
+                    self.hits.push((y, gi.x, gi.x + gi.width, Hit::Pick(p)));
+                }
+                f.render_widget(Paragraph::new(row.line), Rect::new(gi.x, y, gi.width, 1));
+            }
+            let tb = Rect::new(pb.x, pb.y + gh, pb.width, pb.height - gh);
+            self.draw_preview(f, tb, cur);
         }
     }
 
@@ -994,6 +1012,11 @@ impl Popup {
                 match hit.map(|h| &h.3) {
                     Some(Hit::Chip(c)) => return self.chip(*c),
                     Some(Hit::Ws(gi)) => return Some(Some(Go::Ws(self.list.groups[*gi].ws.clone()))),
+                    Some(Hit::Pick(p)) => {
+                        let p = p.clone();
+                        self.ws_mode = false;
+                        self.sel_pane = Some(p);
+                    }
                     // 分隔线上写着收起了几个：点它展开
                     Some(Hit::Row(Row::Header(gi))) => {
                         if !self.list.hidden(*gi).is_empty() {
@@ -1092,6 +1115,7 @@ pub fn run(host: &dyn Host) {
         digits: String::new(),
         digit_at: Instant::now(),
         trs: HashMap::new(),
+        flow: crate::flow::Flow::default(),
         hits: Vec::new(),
     };
     let _ = event::poll(Duration::ZERO);
