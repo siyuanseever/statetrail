@@ -482,6 +482,7 @@ enum Chip {
     Preview,
     Search,
     Enter,
+    Days,
     Plain,
 }
 
@@ -489,7 +490,8 @@ enum Hit {
     Row(Row),
     Chip(Chip),
     Ws(usize), // session 分隔线上除「⋯ 收起」以外的地方：点了切到那个 session
-    Pick(String), // 右上流程图里的一个 Claude：点了选中它
+    Flow(crate::flow::Spot), // 右上流程图里的一个 Claude（点了选中它）或一条线（点了右下换成这条线上传的话）
+    Days(i64),               // 流程图标题上的「1 天 / 7 天 / 30 天」
 }
 
 struct Popup {
@@ -505,6 +507,12 @@ struct Popup {
     /// 右边那块要的：对话记录末尾那一段读出来的轮次、模型 / 上下文那一行；文件长度没变就不重读
     trs: HashMap<PathBuf, (u64, Transcript, String)>,
     flow: crate::flow::Flow,
+    /// 流程图看最近几天；点开的那条线（两头的节点），右下就显示这条线上传的话
+    days: i64,
+    link: Option<(String, String)>,
+    /// 点开的线往回翻了几句（滚轮在右下那块上滚），和右下那块在哪
+    talk_off: usize,
+    talk_at: Rect,
     hits: Vec<(u16, u16, u16, Hit)>,
 }
 
@@ -556,6 +564,7 @@ impl Popup {
     }
 
     fn move_sel(&mut self, d: isize) {
+        self.link = None;
         if self.ws_mode {
             // 选中的是工作区：j 进到它的第一个 Claude，k 到它前面那个 Claude
             self.set_level(false);
@@ -577,6 +586,7 @@ impl Popup {
     /// 在工作区上按 j 进到它的第一个 Claude，按 k 回到上一个 Claude；在 Claude 上按 h l 照样换工作区。
     /// 四个键随便按（用户 2026-11-09：「hl session 选择，jk window 选择……四个按键可以随意切换」）。
     fn jump_ws(&mut self, d: isize) {
+        self.link = None;
         let n = self.list.groups.len() as isize;
         if n == 0 {
             return;
@@ -647,6 +657,10 @@ impl Popup {
                     self.list.query = Some(String::new());
                 }
             }
+            Chip::Days => {
+                let i = crate::flow::RANGES.iter().position(|&d| d == self.days).map_or(0, |i| i + 1);
+                self.days = crate::flow::RANGES[i % crate::flow::RANGES.len()];
+            }
             Chip::Plain => {}
         }
         None
@@ -704,6 +718,7 @@ impl Popup {
             ("a", if self.list.show_all { t("收起") } else { t("全部") }, Chip::All),
             ("p", t("预览"), Chip::Preview),
             ("/", t("搜索"), Chip::Search),
+            ("t", t("时间段"), Chip::Days),
             ("⏎", t("跳转"), Chip::Enter),
         ];
         let mut x = 1u16;
@@ -814,20 +829,99 @@ impl Popup {
             let labels: HashMap<String, String> = self.list.groups.iter().map(|g| (g.ws.clone(), g.label.clone())).collect();
             let sel = if self.ws_mode { None } else { self.sel_pane.clone() };
             let most = (pb.height * 3 / 5).max(8);
-            let (lines, boxes) =
-                self.flow.draw(&agents, &labels, sel.as_deref(), pb.width.saturating_sub(4) as usize, most.saturating_sub(2) as usize);
+            let open = self.link.as_ref().map(|(a, b)| (a.as_str(), b.as_str()));
+            let (lines, spots) = self.flow.draw(
+                &agents,
+                &labels,
+                sel.as_deref(),
+                open,
+                self.days,
+                pb.width.saturating_sub(4) as usize,
+                most.saturating_sub(2) as usize,
+            );
             let gh = (lines.len() as u16 + 2).clamp(5, most).min(pb.height);
             let gb = Rect::new(pb.x, pb.y, pb.width, gh);
-            let gi = framed(f, gb, &t("流程 · 最近 24 小时"), Span::raw(""), false);
-            for (y, x0, x1, p) in boxes {
+            let gi = framed(f, gb, &t("流程"), Span::raw(""), false);
+            // 标题右边：1 天 · 7 天 · 30 天，跟后台页面上选时间段一样，点哪个看哪个（t 键轮着换）
+            let mut x = gb.x + gb.width.saturating_sub(2);
+            for &d in crate::flow::RANGES.iter().rev() {
+                let label = format!(" {} ", t(&format!("{d} 天")));
+                let w = label.width() as u16;
+                x = x.saturating_sub(w + 1);
+                let st = if d == self.days {
+                    Style::default().fg(c.accent).add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                } else {
+                    grey
+                };
+                f.render_widget(Paragraph::new(Span::styled(label, st)), Rect::new(x, gb.y, w, 1));
+                self.hits.push((gb.y, x, x + w, Hit::Days(d)));
+            }
+            for (y, x0, x1, spot) in spots {
                 if y < gi.height {
-                    self.hits.push((gi.y + y, gi.x + x0, gi.x + x1, Hit::Pick(p)));
+                    self.hits.push((gi.y + y, gi.x + x0, gi.x + x1, Hit::Flow(spot)));
                 }
             }
             f.render_widget(Paragraph::new(lines), gi);
             let tb = Rect::new(pb.x, pb.y + gh, pb.width, pb.height - gh);
-            self.draw_preview(f, tb, cur);
+            match self.link.clone() {
+                Some((a, b)) => self.draw_talk(f, tb, &agents, &a, &b),
+                None => self.draw_preview(f, tb, cur),
+            }
         }
+    }
+
+    /// 点开流程图上的一条线：右下换成这两个 Claude 之间来回传的原话，最新的在最下面，Esc 回到轮次。
+    fn draw_talk(&mut self, f: &mut ratatui::Frame, pb: Rect, agents: &[Agent], a: &str, b: &str) {
+        let c = colors();
+        let grey = Style::default().fg(c.grey);
+        let said = self.flow.talk(agents, a, b, self.days);
+        let name = |k: &str| crate::flow::name_of(agents, k);
+        let title = format!("{} ⇄ {}", name(a), name(b));
+        let off = if self.talk_off > 0 { format!("{} {} · ", t("往回翻了"), self.talk_off) } else { String::new() };
+        let r = framed(f, pb, &title, Span::styled(format!("{off}{} {} · Esc {}", said.len(), t("条"), t("返回")), grey), true);
+        let w = r.width as usize;
+        let today = chrono::Local::now().date_naive();
+        self.talk_at = pb;
+        self.talk_off = self.talk_off.min(said.len().saturating_sub(1));
+        let mut body: Vec<Line> = Vec::new();
+        for s in said.iter().rev().skip(self.talk_off) {
+            let at = chrono::DateTime::from_timestamp(s.ts, 0).map(|d| d.with_timezone(&chrono::Local));
+            let at = at.map_or_else(String::new, |d| if d.date_naive() == today { d.format("%H:%M").to_string() } else { d.format("%m-%d %H:%M").to_string() });
+            let mut lines = vec![Line::from(vec![
+                Span::styled(format!("{at}  "), grey),
+                Span::styled(name(&s.from), Style::default().fg(c.accent).add_modifier(Modifier::BOLD)),
+                Span::styled(" → ", grey),
+                Span::styled(name(&s.to), Style::default().add_modifier(Modifier::BOLD)),
+            ])];
+            // 原话按宽度折行，一句最多 4 行，多放几句；要看更早的在这块上滚滚轮
+            let mut rows: Vec<String> = Vec::new();
+            for para in s.text.lines().filter(|l| !l.trim().is_empty()) {
+                let mut cur = String::new();
+                for ch in para.chars() {
+                    if cur.width() + ch.to_string().width() > w.saturating_sub(2) {
+                        rows.push(std::mem::take(&mut cur));
+                    }
+                    cur.push(ch);
+                }
+                rows.push(cur);
+            }
+            if rows.len() > 4 {
+                rows.truncate(4);
+                rows.push("…".into());
+            }
+            lines.extend(rows.into_iter().map(|l| Line::from(format!("  {l}"))));
+            lines.push(Line::default());
+            if body.len() + lines.len() > r.height as usize && !body.is_empty() {
+                break;
+            }
+            lines.extend(body);
+            body = lines;
+        }
+        if said.is_empty() {
+            body.push(Line::from(Span::styled(t("这段时间里这条线上没有传过话"), grey)));
+        }
+        let skip = body.len().saturating_sub(r.height as usize);
+        f.render_widget(Paragraph::new(body.split_off(skip)), r);
     }
 
     fn draw_preview(&mut self, f: &mut ratatui::Frame, pb: Rect, cur: Option<Row>) {
@@ -966,7 +1060,9 @@ impl Popup {
             return None;
         }
         match k.code {
+            KeyCode::Esc if self.link.is_some() => self.link = None,
             KeyCode::Esc | KeyCode::Char('q') => return Some(None),
+            KeyCode::Char('t') => return self.chip(Chip::Days),
             KeyCode::Enter => return Some(self.chosen()),
             // h l 换工作区，j k 在 Claude 之间挪，随便按
             KeyCode::Left | KeyCode::Char('h') => self.jump_ws(-1),
@@ -1003,6 +1099,12 @@ impl Popup {
 
     fn mouse(&mut self, m: event::MouseEvent) -> Option<Option<Go>> {
         match m.kind {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                if self.link.is_some() && self.talk_at.contains(ratatui::layout::Position::new(m.column, m.row)) =>
+            {
+                let up = matches!(m.kind, MouseEventKind::ScrollUp);
+                self.talk_off = if up { self.talk_off + 1 } else { self.talk_off.saturating_sub(1) };
+            }
             MouseEventKind::ScrollUp => self.move_sel(-1),
             MouseEventKind::ScrollDown => self.move_sel(1),
             MouseEventKind::Down(MouseButton::Left) => {
@@ -1013,11 +1115,17 @@ impl Popup {
                 match hit.map(|h| &h.3) {
                     Some(Hit::Chip(c)) => return self.chip(*c),
                     Some(Hit::Ws(gi)) => return Some(Some(Go::Ws(self.list.groups[*gi].ws.clone()))),
-                    Some(Hit::Pick(p)) => {
+                    Some(Hit::Flow(crate::flow::Spot::Node(p))) => {
                         let p = p.clone();
                         self.ws_mode = false;
                         self.sel_pane = Some(p);
+                        self.link = None;
                     }
+                    Some(Hit::Flow(crate::flow::Spot::Link(a, b))) => {
+                        self.link = Some((a.clone(), b.clone()));
+                        self.talk_off = 0;
+                    }
+                    Some(Hit::Days(d)) => self.days = *d,
                     // 分隔线上写着收起了几个：点它展开
                     Some(Hit::Row(Row::Header(gi))) => {
                         if !self.list.hidden(*gi).is_empty() {
@@ -1117,6 +1225,10 @@ pub fn run(host: &dyn Host) {
         digit_at: Instant::now(),
         trs: HashMap::new(),
         flow: crate::flow::Flow::default(),
+        days: 1,
+        link: None,
+        talk_off: 0,
+        talk_at: Rect::default(),
         hits: Vec::new(),
     };
     let _ = event::poll(Duration::ZERO);
@@ -1159,6 +1271,7 @@ pub fn run(host: &dyn Host) {
             break r;
         }
     };
+    p.flow.save();
     let _ = execute!(term.backend_mut(), event::DisableMouseCapture, terminal::LeaveAlternateScreen);
     let _ = terminal::disable_raw_mode();
     if let Some(g) = picked {

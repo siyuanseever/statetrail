@@ -172,7 +172,17 @@ h/l 工作区	h/l workspace
 做完了，看过了	finished, seen
 找不到它的对话记录	no transcript found
 还没有说过话	no turns yet
-流程 · 最近 24 小时	Flow · last 24h
-最近一天这些 Claude 之间没有传过话	No messages between these Claudes in the last day
+流程	Flow
+这段时间里这些 Claude 之间没有传过话	No messages between these Claudes in this period
 没传过话：	No messages: 
-框是 Claude，箭头从传话的指向收话的，数字是传了几次，亮的线是十分钟内传过的	Boxes are Claudes; arrows go from sender to receiver; numbers count messages; bright lines are from the last 10 minutes
+框是 Claude，箭头指向收到话的那个，数字是传了几次，亮的线是十分钟内传过的。点一条线看传了什么	Boxes are Claudes; arrows point at the receiver; numbers count messages; bright lines are from the last 10 minutes. Click a line to read the messages
+1 天	1d
+7 天	7d
+30 天	30d
+时间段	range
+返回	back
+这段时间里这条线上没有传过话	No messages on this line in this period
+条	msgs
+往回翻了	scrolled back
+还有	Another
+对传得少的放不下没画，选短一点的时间段能看全	quieter pairs did not fit and are not drawn; pick a shorter range to see all
