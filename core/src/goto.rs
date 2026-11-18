@@ -1120,6 +1120,14 @@ impl Popup {
                         self.ws_mode = false;
                         self.sel_pane = Some(p);
                         self.link = None;
+                        // 图上点的 Claude 在左边被收起或搜不到：展开、清掉搜索，让它真的被选中
+                        let there = |s: &Self| s.stops().into_iter().any(|r| s.is_sel(r));
+                        if !there(self) {
+                            self.list.show_all = true;
+                        }
+                        if !there(self) {
+                            self.list.query = None;
+                        }
                     }
                     Some(Hit::Flow(crate::flow::Spot::Link(a, b))) => {
                         self.link = Some((a.clone(), b.clone()));
