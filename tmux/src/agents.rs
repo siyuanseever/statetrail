@@ -420,7 +420,7 @@ fn colour(s: Show) -> &'static str {
     }
 }
 
-/// 状态栏那一排：`OS ●●●  news ●●●●`，当前 session 的名字亮，点一个点跳到那个 Claude（status-click.sh 的 p<n>），
+/// 状态栏那一排：`OS ●◉●  news ●●●●`，当前 session 的名字亮，当前打开的那个 Claude 是 ◉，点一个点跳到那个 Claude（status-click.sh 的 p<n>），
 /// 点 session 名切到那个 session（s<n>，n 是 session id 去掉 $：名字可能比 range 名能放的长）。
 /// range 名用 p<数字> 不用 %<数字>：选项内容会被当格式再展开一遍，% 会被 strftime 吃掉。
 fn render_dots(shown: &[(&Pane, Show)]) -> String {
@@ -430,7 +430,9 @@ fn render_dots(shown: &[(&Pane, Show)]) -> String {
             groups.push((&p.sess, &p.sess_id, String::new()));
         }
         let g = groups.last_mut().unwrap();
-        g.2 += &format!("#[range=user|p{}]#[fg={}]●#[norange]", p.id.trim_start_matches('%'), colour(*s));
+        // 当前打开的那个画成 ◉：比的是去掉 % 的 pane_id（选项里写不了 %，见上）
+        let n = p.id.trim_start_matches('%');
+        g.2 += &format!("#[range=user|p{n}]#[fg={}]#{{?#{{==:#{{s/^.//:pane_id}},{n}}},◉,●}}#[norange]", colour(*s));
     }
     let out: Vec<String> = groups
         .iter()
@@ -588,10 +590,14 @@ mod tests {
                 }
                 s.replace_range(i..=j, "");
             }
+            while let Some(i) = s.find("#{?#{==:#{s/^.//:pane_id}") {
+                let j = i + s[i..].find(",◉,●}").unwrap() + ",◉,●}".len();
+                s.replace_range(i..j, "●");
+            }
             s
         };
         assert!(plain.contains("OS ●●") && plain.contains("news ●"), "{plain}");
-        assert!(d.contains("range=user|p7]#[fg=#ff5f5f]●"));
+        assert!(d.contains("range=user|p7]#[fg=#ff5f5f]#{?#{==:#{s/^.//:pane_id},7},◉,●}"), "{d}");
         assert!(!d.contains('%'));
         assert!(d.contains("#[range=user|s2]OS#[norange]"), "{d}");
     }
