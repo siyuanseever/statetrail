@@ -63,6 +63,26 @@ pub struct Config {
     pub chapters: String, // "auto" / "manual" / "off"
     pub live_usage: bool, // 额度旧了去查（经 usage-refresh.py）；false 只读现有的读数
     pub scripts: PathBuf, // claude-tmux-sessions 的 bin/（float-tool.sh、switch_account.py）
+    pub buttons: Vec<RunButton>, // 配置里的 [[buttons]]：表头按钮那一行后面接着画，点了在后台跑 run
+}
+
+/// [[buttons]]：icon 是 header 图标表里的名字（比如 "monitor"）就按档位取字形，否则原样用；
+/// 文字档（icons = "text"）画 label。run 经 sh -c 在 Claude 那一格的目录里后台跑，不开窗格。
+#[derive(Clone)]
+pub struct RunButton {
+    pub icon: String,
+    pub label: String,
+    pub run: String,
+}
+
+fn parse_buttons(v: Option<&toml::Value>) -> Vec<RunButton> {
+    let s = |b: &toml::Value, k: &str| b.get(k).and_then(toml::Value::as_str).unwrap_or("").to_owned();
+    v.and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|b| RunButton { icon: s(b, "icon"), label: s(b, "label"), run: s(b, "run") })
+        .filter(|b| !b.run.trim().is_empty())
+        .collect()
 }
 
 pub fn config() -> Config {
@@ -95,6 +115,7 @@ pub fn config() -> Config {
             .and_then(toml::Value::as_str)
             .map(expand)
             .unwrap_or_else(default_scripts),
+        buttons: parse_buttons(t.get("buttons")),
     }
 }
 

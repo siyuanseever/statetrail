@@ -81,7 +81,8 @@ statetrail-tmux search <word…> --json [--since <ISO time>] [--cwd <prefix>] [-
 ## Configuration
 
 `~/.config/statetrail-tmux/config.toml`; see [README.zh-CN.md](README.zh-CN.md#配置) for every key
-(`auto_open`, `default_mode`, `button_mode`, `width`, `min_width`, `shell_height`, `chapters`, `live_usage`, `icons`, `lang`, `scripts`, `[theme]`).
+(`auto_open`, `default_mode`, `button_mode`, `width`, `min_width`, `shell_height`, `chapters`, `live_usage`, `icons`, `lang`, `scripts`, `[theme]`,
+`[[buttons]]` — your own header buttons that run a command in the background, e.g. open a dashboard).
 
 ## Memory and CPU
 

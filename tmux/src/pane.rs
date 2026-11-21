@@ -300,6 +300,11 @@ impl Trail {
             "close" => open::close(&self.target), // 连同自己一起关掉；记下是你关的，常驻进程不再自动开
             "narrow" | "wide" => self.toggle_width(),
             "search" => self.open_search(),
+            a if a.starts_with("run:") => {
+                if let Some(b) = a[4..].parse::<usize>().ok().and_then(|i| self.cfg.buttons.get(i)) {
+                    run_detached(&b.run, &self.cwd);
+                }
+            }
             _ => {}
         }
     }
@@ -917,19 +922,37 @@ impl Trail {
 /// 最上面一行 « / » 切宽窄、⇊ 到最底、⟳ 刷新（宽版后面带额度多新）；最底下一行 Git、文件。
 /// 命令行不做按钮：照旧在轨迹上面切一条（用户 2026-11-09 试过底部按钮后：「我还是喜欢之前的，上边直接打开一个pane来命令行」）。
 /// 搜索按 /，关掉点状态栏的轨迹按钮。每个按钮占 3 格，点偏一格也算。
-fn button_rows(narrow: bool) -> Vec<Vec<Button>> {
+/// 配置里的 [[buttons]] 接在这一行最后（用户 2026-11-21：给打开面板一个单独的按键，放在右侧轨迹上）。
+fn button_rows(narrow: bool, extra: &[crate::RunButton]) -> Vec<Vec<Button>> {
     let b = |name: &str, act: &str, extra: usize| (header::icon(name), act.to_owned(), extra);
-    if narrow {
-        vec![vec![b("wide", "wide", 0), b("bottom", "bottom", 0), b("usage", "usage", 0)]]
+    let mut row = if narrow {
+        vec![b("wide", "wide", 0), b("bottom", "bottom", 0), b("usage", "usage", 0)]
     } else {
-        vec![vec![b("narrow", "narrow", 0), b("bottom", "bottom", 0), b("usage", "usage", 18)]]
+        vec![b("narrow", "narrow", 0), b("bottom", "bottom", 0), b("usage", "usage", 18)]
+    };
+    for (i, x) in extra.iter().enumerate() {
+        let face = Some(header::button_icon(&x.icon)).filter(|f| !f.is_empty()).unwrap_or_else(|| x.label.clone());
+        row.push((face, format!("run:{i}"), 0));
     }
+    vec![row]
 }
 
 /// 最底下那一行：Git（宽版后面带没提交的文件数）、文件。
 fn foot_buttons(narrow: bool) -> Vec<Button> {
     let b = |name: &str, act: &str, extra: usize| (header::icon(name), act.to_owned(), extra);
     vec![b("git", "git", if narrow { 0 } else { 4 }), b("files", "files", 0)]
+}
+
+/// 配置按钮的命令：sh -c 后台跑，输出丢掉；另起线程等它结束，不留僵尸进程。
+fn run_detached(cmd: &str, cwd: &str) {
+    let mut c = std::process::Command::new("sh");
+    c.arg("-c").arg(cmd).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    if !cwd.is_empty() && std::path::Path::new(cwd).is_dir() {
+        c.current_dir(cwd);
+    }
+    if let Ok(mut child) = c.spawn() {
+        std::thread::spawn(move || child.wait());
+    }
 }
 
 fn spawn_threads(tx: &Sender<Msg>, me: &str) {
@@ -1147,7 +1170,7 @@ fn run_loop(
             };
             let items = view.items();
             let room = size.width.saturating_sub(2) as usize;
-            s.rows = button_rows(narrow);
+            s.rows = button_rows(narrow, &s.cfg.buttons);
             let mut info = header::Info {
                 cfg_dir: &s.cfg_dir,
                 model: &model,

@@ -92,6 +92,12 @@ scripts = "~/projects/claude-tmux-sessions/bin"   # 不写就顺着 ~/.claude/ho
 
 [theme]
 name = "catppuccin"       # 配色，名字和 herdr 的主题一样
+
+# 表头按钮那一行最后加自己的按钮，可以写好几个：点了在后台跑 run（sh -c，在 Claude 那一格的目录里），不开窗格
+[[buttons]]
+icon = "monitor"          # 图标表里的名字（monitor、shell、files……）按档位取字形，别的原样当字形用
+label = "面板"            # icons = "text" 时画这个
+run = "open http://127.0.0.1:8765/"
 ```
 
 ## 读什么、动什么
