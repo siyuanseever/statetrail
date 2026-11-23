@@ -819,6 +819,10 @@ impl Popup {
                 })
                 .collect();
             f.render_widget(Paragraph::new(lines), fi);
+            // 点一条动态选中那个 Claude，跟点流程图上的框一样（左边收起了也展开）
+            for (i, a) in feed.iter().take(fi.height as usize).enumerate() {
+                self.hits.push((fi.y + i as u16, fi.x, fi.x + fi.width, Hit::Flow(crate::flow::Spot::Node(a.pane.clone()))));
+            }
         }
 
         // ---- 右边：预览框 ----
