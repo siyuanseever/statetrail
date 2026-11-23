@@ -513,6 +513,8 @@ struct Popup {
     /// 点开的线往回翻了几句（滚轮在右下那块上滚），和右下那块在哪
     talk_off: usize,
     talk_at: Rect,
+    /// 上一次单击的 Claude（动态里一条、或流程图上的框）和时间：同一个很快又点一次算双击，跳过去
+    last_node: Option<(std::time::Instant, String)>,
     hits: Vec<(u16, u16, u16, Hit)>,
 }
 
@@ -1125,6 +1127,11 @@ impl Popup {
                     Some(Hit::Ws(gi)) => return Some(Some(Go::Ws(self.list.groups[*gi].ws.clone()))),
                     Some(Hit::Flow(crate::flow::Spot::Node(p))) => {
                         let p = p.clone();
+                        let again = self.last_node.take().is_some_and(|(t, q)| q == p && t.elapsed().as_millis() < 400);
+                        if again && !self.ws_mode && self.sel_pane.as_ref() == Some(&p) {
+                            return Some(self.chosen());
+                        }
+                        self.last_node = Some((std::time::Instant::now(), p.clone()));
                         self.ws_mode = false;
                         self.sel_pane = Some(p);
                         self.link = None;
@@ -1245,6 +1252,7 @@ pub fn run(host: &dyn Host) {
         link: None,
         talk_off: 0,
         talk_at: Rect::default(),
+        last_node: None,
         hits: Vec::new(),
     };
     let _ = event::poll(Duration::ZERO);
