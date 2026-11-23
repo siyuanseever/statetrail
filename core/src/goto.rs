@@ -809,13 +809,17 @@ impl Popup {
                         State::Read | State::Stale => t("做完了，看过了"),
                     };
                     let ws = self.list.groups.iter().find(|g| g.ws == a.ws).map(|g| g.label.clone()).unwrap_or_default();
-                    Line::from(vec![
+                    // 选中的那个 Claude 的动态，跟左边列表一样：前面一道 ▌、整行选中底色
+                    let on = !self.ws_mode && self.sel_pane.as_ref() == Some(&a.pane);
+                    let line = Line::from(vec![
+                        Span::styled(if on { "▌" } else { " " }, Style::default().fg(c.accent)),
                         Span::styled(format!("{at}  "), grey),
                         Span::styled(format!("{icon} "), st),
                         Span::styled(format!("{ws} · "), Style::default().fg(c.cyan)),
                         Span::styled(a.name.clone(), Style::default().add_modifier(Modifier::BOLD)),
                         Span::styled(format!("  {verb}"), grey),
-                    ])
+                    ]);
+                    if on { line.style(bg) } else { line }
                 })
                 .collect();
             f.render_widget(Paragraph::new(lines), fi);
