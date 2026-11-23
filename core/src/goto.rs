@@ -2,7 +2,7 @@
 //! 原来是 herdr 版的 `statetrail goto`：herdr 自带的 Goto 换成 tmux 版 claude-tmux-picker 的样子和按键
 //! （用户 2026-10-30：「这个功能做的跟我在 tmux 里的差很多呀……把交互逻辑对齐一下，UI 也尽量对齐，或者写的更好看」）。
 //! 居中的浮窗（herdr 的 popup，宽 95% 高 85%，和 tmux 的 display-popup 一样大），按工作区分组，一行一个 Claude：
-//! 行号、状态（⏸ WAIT / ✔ DONE / ▶ RUN / ✓ READ）、名字、这个状态待了多久、它在做什么（开场那句话）。
+//! 行号、状态（● WAIT / ● DONE / ● RUN / ● READ，颜色跟状态栏圆点一样）、名字、这个状态待了多久、它在做什么（开场那句话）。
 //! 安静的（READ、做完两小时没看的）默认收起，a 展开；右边是选中那个 Claude 的实时画面，p 收起。
 //! h 进到工作区那一层，l 回来；行号直接跳，/ 搜索，Enter 跳过去，q / Esc 关。
 
@@ -375,11 +375,13 @@ fn badge(state: State) -> (&'static str, Style) {
     let c = colors();
     let bold = Modifier::BOLD;
     match state {
-        State::Wait => ("⏸ WAIT", Style::default().fg(c.alert).add_modifier(bold)),
-        State::Done => ("✔ DONE", Style::default().fg(c.done).add_modifier(bold)),
-        State::Run => ("▶ RUN ", Style::default().fg(c.busy)),
-        State::Read => ("✓ READ", Style::default().fg(c.time)),
-        State::Stale => ("✔ DONE", Style::default().add_modifier(Modifier::DIM)),
+        // 跟状态栏那排圆点一样都是 ●，只靠颜色分：做完了没看是亮绿，看过了是灰（用户 2026-11-23：
+        // 「read 和 done 不是很好区分」，绿底一块「太难看了，不能用我们的圆圈吗」）
+        State::Wait => ("● WAIT", Style::default().fg(c.alert).add_modifier(bold)),
+        State::Done => ("● DONE", Style::default().fg(c.done).add_modifier(bold)),
+        State::Run => ("● RUN ", Style::default().fg(c.busy)),
+        State::Read => ("● READ", Style::default().fg(c.dim)),
+        State::Stale => ("● DONE", Style::default().add_modifier(Modifier::DIM)),
     }
 }
 
@@ -702,7 +704,8 @@ impl Popup {
             let (b, bst) = badge(st);
             let icon = b.split(' ').next().unwrap_or("").to_owned();
             let style = if num == 0 { Style::default().fg(c.dim) } else { bst };
-            title.push(Span::styled(format!("{icon} {num} "), style));
+            title.push(Span::styled(format!("{icon} {num}"), style));
+            title.push(Span::raw(" "));
             title.push(Span::styled(format!("{label}   "), if num == 0 { Style::default().fg(c.dim) } else { grey }));
         }
         f.render_widget(Paragraph::new(Line::from(title)), Rect::new(0, 0, area.width, 1));
@@ -816,7 +819,8 @@ impl Popup {
                     let line = Line::from(vec![
                         Span::styled(if on { "▌" } else { " " }, Style::default().fg(c.accent)),
                         Span::styled(format!("{at}  "), grey),
-                        Span::styled(format!("{icon} "), st),
+                        Span::styled(icon, st),
+                        Span::raw(" "),
                         Span::styled(format!("{ws} · "), Style::default().fg(c.cyan)),
                         Span::styled(a.name.clone(), Style::default().add_modifier(Modifier::BOLD)),
                         Span::styled(format!("  {verb}"), grey),
@@ -1380,7 +1384,7 @@ mod tests {
             .iter()
             .map(|s| s.content.as_ref())
             .collect();
-        assert!(s.starts_with("   3  ⏸ WAIT  deploy"), "{s}");
+        assert!(s.starts_with("   3  ● WAIT  deploy"), "{s}");
         assert!(
             s.contains(&t("等确认 {d}").replace("{d}", &t("{n}分钟").replace("{n}", "1"))),
             "{s}"

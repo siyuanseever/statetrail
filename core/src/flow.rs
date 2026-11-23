@@ -665,8 +665,8 @@ impl Flow {
                     spans.push(Span::styled(more, grey));
                     break;
                 }
-                spans.push(Span::styled(format!("{icon} "), st));
-                spans.push(Span::styled(format!("{}  ", a.name), grey));
+                spans.push(Span::styled(icon, st));
+                spans.push(Span::styled(format!(" {}  ", a.name), grey));
                 used += piece.width();
             }
             out.push(Line::from(spans));
@@ -683,10 +683,10 @@ pub fn name_of(agents: &[Agent], key: &str) -> String {
 fn state_icon(s: State) -> (&'static str, Style) {
     let c = colors();
     match s {
-        State::Wait => ("⏸", Style::default().fg(c.alert)),
-        State::Done => ("✔", Style::default().fg(c.done)),
-        State::Run => ("▶", Style::default().fg(c.busy)),
-        State::Read => ("✓", Style::default().fg(c.time)),
-        State::Stale => ("✔", Style::default().add_modifier(Modifier::DIM)),
+        State::Wait => ("●", Style::default().fg(c.alert)),
+        State::Done => ("●", Style::default().fg(c.done)),
+        State::Run => ("●", Style::default().fg(c.busy)),
+        State::Read => ("●", Style::default().fg(c.dim)),
+        State::Stale => ("●", Style::default().add_modifier(Modifier::DIM)),
     }
 }
